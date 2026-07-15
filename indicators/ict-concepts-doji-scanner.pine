@@ -187,26 +187,22 @@ var box[]   bearObBox = array.new_box()
 var float[] bearObTop = array.new_float()
 
 if bullBOS and showOB
-    var bool obFoundUp = false
-    obFoundUp := false
     for i = 1 to obLookback
-        if not obFoundUp and close[i] < open[i]
+        if close[i] < open[i]
             ob = box.new(bar_index[i], high[i], bar_index, low[i], border_color=color.new(color.teal, 40), bgcolor=color.new(color.teal, 85))
             label.new(bar_index[i], low[i], "OB", style=label.style_label_up, color=color.new(color.teal, 100), textcolor=color.teal, size=size.tiny)
             array.push(bullObBox, ob)
             array.push(bullObBot, low[i])
-            obFoundUp := true
+            break
 
 if bearBOS and showOB
-    var bool obFoundDown = false
-    obFoundDown := false
     for i = 1 to obLookback
-        if not obFoundDown and close[i] > open[i]
+        if close[i] > open[i]
             ob = box.new(bar_index[i], high[i], bar_index, low[i], border_color=color.new(color.maroon, 40), bgcolor=color.new(color.maroon, 85))
             label.new(bar_index[i], high[i], "OB", style=label.style_label_down, color=color.new(color.maroon, 100), textcolor=color.maroon, size=size.tiny)
             array.push(bearObBox, ob)
             array.push(bearObTop, high[i])
-            obFoundDown := true
+            break
 
 if showOB and array.size(bullObBox) > 0
     for j = array.size(bullObBox) - 1 to 0
@@ -227,6 +223,10 @@ if showOB and array.size(bearObBox) > 0
 
 // ============================================================
 // EQUILIBRIUM / PREMIUM-DISCOUNT — midpoint of the active swing range
+// Objects are created once and moved with set_xy/set_lefttop/set_rightbottom
+// on subsequent bars instead of being deleted and recreated every bar — the
+// delete+new pattern was churning line/box objects across the entire chart
+// history and on every realtime tick, which is unnecessary drawing overhead.
 // ============================================================
 var line eqLine = na
 var box  premiumBox = na
@@ -237,17 +237,17 @@ if rangeValid
     eqLevel = (lastSwingHigh + lastSwingLow) / 2
     leftBar = math.min(lastSwingHighBar, lastSwingLowBar)
 
-    if not na(eqLine)
-        line.delete(eqLine)
-    eqLine := line.new(leftBar, eqLevel, bar_index, eqLevel, color=color.new(color.gray, 30), style=line.style_dashed, width=1)
-
-    if not na(premiumBox)
-        box.delete(premiumBox)
-    premiumBox := box.new(leftBar, lastSwingHigh, bar_index, eqLevel, border_color=na, bgcolor=color.new(color.red, 93))
-
-    if not na(discountBox)
-        box.delete(discountBox)
-    discountBox := box.new(leftBar, eqLevel, bar_index, lastSwingLow, border_color=na, bgcolor=color.new(color.lime, 93))
+    if na(eqLine)
+        eqLine := line.new(leftBar, eqLevel, bar_index, eqLevel, color=color.new(color.gray, 30), style=line.style_dashed, width=1)
+        premiumBox := box.new(leftBar, lastSwingHigh, bar_index, eqLevel, border_color=na, bgcolor=color.new(color.red, 93))
+        discountBox := box.new(leftBar, eqLevel, bar_index, lastSwingLow, border_color=na, bgcolor=color.new(color.lime, 93))
+    else
+        line.set_xy1(eqLine, leftBar, eqLevel)
+        line.set_xy2(eqLine, bar_index, eqLevel)
+        box.set_lefttop(premiumBox, leftBar, lastSwingHigh)
+        box.set_rightbottom(premiumBox, bar_index, eqLevel)
+        box.set_lefttop(discountBox, leftBar, eqLevel)
+        box.set_rightbottom(discountBox, bar_index, lastSwingLow)
 
 // ============================================================
 // PREVIOUS DAY / WEEK HIGH & LOW
@@ -277,27 +277,43 @@ var label pdLowLbl  = na
 var label pwHighLbl = na
 var label pwLowLbl  = na
 
+// Objects are only deleted+recreated on the bar a new day/week actually
+// starts (dayStartBar/weekStartBar == bar_index); every other bar just
+// nudges the existing line/label's right edge forward with set_xy2/set_x,
+// instead of destroying and rebuilding 4 drawing objects on every bar.
 if showPDHL and not na(pdHigh)
-    if not na(pdHighLine)
-        line.delete(pdHighLine)
-        line.delete(pdLowLine)
-        label.delete(pdHighLbl)
-        label.delete(pdLowLbl)
-    pdHighLine := line.new(dayStartBar, pdHigh, bar_index, pdHigh, color=color.new(color.silver, 20), style=line.style_dashed, width=1)
-    pdLowLine  := line.new(dayStartBar, pdLow,  bar_index, pdLow,  color=color.new(color.silver, 20), style=line.style_dashed, width=1)
-    pdHighLbl  := label.new(bar_index, pdHigh, "PDH", style=label.style_label_left, color=color.new(color.silver, 100), textcolor=color.silver, size=size.tiny)
-    pdLowLbl   := label.new(bar_index, pdLow,  "PDL", style=label.style_label_left, color=color.new(color.silver, 100), textcolor=color.silver, size=size.tiny)
+    if na(pdHighLine) or dayStartBar == bar_index
+        if not na(pdHighLine)
+            line.delete(pdHighLine)
+            line.delete(pdLowLine)
+            label.delete(pdHighLbl)
+            label.delete(pdLowLbl)
+        pdHighLine := line.new(dayStartBar, pdHigh, bar_index, pdHigh, color=color.new(color.silver, 20), style=line.style_dashed, width=1)
+        pdLowLine  := line.new(dayStartBar, pdLow,  bar_index, pdLow,  color=color.new(color.silver, 20), style=line.style_dashed, width=1)
+        pdHighLbl  := label.new(bar_index, pdHigh, "PDH", style=label.style_label_left, color=color.new(color.silver, 100), textcolor=color.silver, size=size.tiny)
+        pdLowLbl   := label.new(bar_index, pdLow,  "PDL", style=label.style_label_left, color=color.new(color.silver, 100), textcolor=color.silver, size=size.tiny)
+    else
+        line.set_xy2(pdHighLine, bar_index, pdHigh)
+        line.set_xy2(pdLowLine, bar_index, pdLow)
+        label.set_x(pdHighLbl, bar_index)
+        label.set_x(pdLowLbl, bar_index)
 
 if showPWHL and not na(pwHigh)
-    if not na(pwHighLine)
-        line.delete(pwHighLine)
-        line.delete(pwLowLine)
-        label.delete(pwHighLbl)
-        label.delete(pwLowLbl)
-    pwHighLine := line.new(weekStartBar, pwHigh, bar_index, pwHigh, color=color.new(color.blue, 20), style=line.style_dotted, width=1)
-    pwLowLine  := line.new(weekStartBar, pwLow,  bar_index, pwLow,  color=color.new(color.blue, 20), style=line.style_dotted, width=1)
-    pwHighLbl  := label.new(bar_index, pwHigh, "PWH", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
-    pwLowLbl   := label.new(bar_index, pwLow,  "PWL", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+    if na(pwHighLine) or weekStartBar == bar_index
+        if not na(pwHighLine)
+            line.delete(pwHighLine)
+            line.delete(pwLowLine)
+            label.delete(pwHighLbl)
+            label.delete(pwLowLbl)
+        pwHighLine := line.new(weekStartBar, pwHigh, bar_index, pwHigh, color=color.new(color.blue, 20), style=line.style_dotted, width=1)
+        pwLowLine  := line.new(weekStartBar, pwLow,  bar_index, pwLow,  color=color.new(color.blue, 20), style=line.style_dotted, width=1)
+        pwHighLbl  := label.new(bar_index, pwHigh, "PWH", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+        pwLowLbl   := label.new(bar_index, pwLow,  "PWL", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+    else
+        line.set_xy2(pwHighLine, bar_index, pwHigh)
+        line.set_xy2(pwLowLine, bar_index, pwLow)
+        label.set_x(pwHighLbl, bar_index)
+        label.set_x(pwLowLbl, bar_index)
 
 // ============================================================
 // SESSION HIGHS/LOWS — Asia, London, New York
@@ -357,38 +373,66 @@ var label londonLowLbl  = na
 var label nyHighLbl = na
 var label nyLowLbl  = na
 
+// Objects are only deleted+recreated when a new session instance begins;
+// every other bar (including the running high/low updates while a session
+// is active) just moves the existing line/label with set_xy2/set_x/set_y,
+// instead of destroying and rebuilding 2 lines + 2 labels every bar.
 if showSessions and not na(asiaHigh)
-    if not na(asiaHighLine)
-        line.delete(asiaHighLine)
-        line.delete(asiaLowLine)
-        label.delete(asiaHighLbl)
-        label.delete(asiaLowLbl)
-    asiaHighLine := line.new(asiaStartBar, asiaHigh, bar_index, asiaHigh, color=color.new(color.purple, 30), style=line.style_solid, width=1)
-    asiaLowLine  := line.new(asiaStartBar, asiaLow,  bar_index, asiaLow,  color=color.new(color.purple, 30), style=line.style_solid, width=1)
-    asiaHighLbl  := label.new(bar_index, asiaHigh, "ASIA H", style=label.style_label_left, color=color.new(color.purple, 100), textcolor=color.purple, size=size.tiny)
-    asiaLowLbl   := label.new(bar_index, asiaLow,  "ASIA L", style=label.style_label_left, color=color.new(color.purple, 100), textcolor=color.purple, size=size.tiny)
+    if na(asiaHighLine) or (inAsia and not inAsia[1])
+        if not na(asiaHighLine)
+            line.delete(asiaHighLine)
+            line.delete(asiaLowLine)
+            label.delete(asiaHighLbl)
+            label.delete(asiaLowLbl)
+        asiaHighLine := line.new(asiaStartBar, asiaHigh, bar_index, asiaHigh, color=color.new(color.purple, 30), style=line.style_solid, width=1)
+        asiaLowLine  := line.new(asiaStartBar, asiaLow,  bar_index, asiaLow,  color=color.new(color.purple, 30), style=line.style_solid, width=1)
+        asiaHighLbl  := label.new(bar_index, asiaHigh, "ASIA H", style=label.style_label_left, color=color.new(color.purple, 100), textcolor=color.purple, size=size.tiny)
+        asiaLowLbl   := label.new(bar_index, asiaLow,  "ASIA L", style=label.style_label_left, color=color.new(color.purple, 100), textcolor=color.purple, size=size.tiny)
+    else
+        line.set_xy2(asiaHighLine, bar_index, asiaHigh)
+        line.set_xy2(asiaLowLine, bar_index, asiaLow)
+        label.set_x(asiaHighLbl, bar_index)
+        label.set_x(asiaLowLbl, bar_index)
+        label.set_y(asiaHighLbl, asiaHigh)
+        label.set_y(asiaLowLbl, asiaLow)
 
 if showSessions and not na(londonHigh)
-    if not na(londonHighLine)
-        line.delete(londonHighLine)
-        line.delete(londonLowLine)
-        label.delete(londonHighLbl)
-        label.delete(londonLowLbl)
-    londonHighLine := line.new(londonStartBar, londonHigh, bar_index, londonHigh, color=color.new(color.blue, 30), style=line.style_solid, width=1)
-    londonLowLine  := line.new(londonStartBar, londonLow,  bar_index, londonLow,  color=color.new(color.blue, 30), style=line.style_solid, width=1)
-    londonHighLbl  := label.new(bar_index, londonHigh, "LDN H", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
-    londonLowLbl   := label.new(bar_index, londonLow,  "LDN L", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+    if na(londonHighLine) or (inLondon and not inLondon[1])
+        if not na(londonHighLine)
+            line.delete(londonHighLine)
+            line.delete(londonLowLine)
+            label.delete(londonHighLbl)
+            label.delete(londonLowLbl)
+        londonHighLine := line.new(londonStartBar, londonHigh, bar_index, londonHigh, color=color.new(color.blue, 30), style=line.style_solid, width=1)
+        londonLowLine  := line.new(londonStartBar, londonLow,  bar_index, londonLow,  color=color.new(color.blue, 30), style=line.style_solid, width=1)
+        londonHighLbl  := label.new(bar_index, londonHigh, "LDN H", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+        londonLowLbl   := label.new(bar_index, londonLow,  "LDN L", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+    else
+        line.set_xy2(londonHighLine, bar_index, londonHigh)
+        line.set_xy2(londonLowLine, bar_index, londonLow)
+        label.set_x(londonHighLbl, bar_index)
+        label.set_x(londonLowLbl, bar_index)
+        label.set_y(londonHighLbl, londonHigh)
+        label.set_y(londonLowLbl, londonLow)
 
 if showSessions and not na(nyHigh)
-    if not na(nyHighLine)
-        line.delete(nyHighLine)
-        line.delete(nyLowLine)
-        label.delete(nyHighLbl)
-        label.delete(nyLowLbl)
-    nyHighLine := line.new(nyStartBar, nyHigh, bar_index, nyHigh, color=color.new(color.orange, 30), style=line.style_solid, width=1)
-    nyLowLine  := line.new(nyStartBar, nyLow,  bar_index, nyLow,  color=color.new(color.orange, 30), style=line.style_solid, width=1)
-    nyHighLbl  := label.new(bar_index, nyHigh, "NY H", style=label.style_label_left, color=color.new(color.orange, 100), textcolor=color.orange, size=size.tiny)
-    nyLowLbl   := label.new(bar_index, nyLow,  "NY L", style=label.style_label_left, color=color.new(color.orange, 100), textcolor=color.orange, size=size.tiny)
+    if na(nyHighLine) or (inNY and not inNY[1])
+        if not na(nyHighLine)
+            line.delete(nyHighLine)
+            line.delete(nyLowLine)
+            label.delete(nyHighLbl)
+            label.delete(nyLowLbl)
+        nyHighLine := line.new(nyStartBar, nyHigh, bar_index, nyHigh, color=color.new(color.orange, 30), style=line.style_solid, width=1)
+        nyLowLine  := line.new(nyStartBar, nyLow,  bar_index, nyLow,  color=color.new(color.orange, 30), style=line.style_solid, width=1)
+        nyHighLbl  := label.new(bar_index, nyHigh, "NY H", style=label.style_label_left, color=color.new(color.orange, 100), textcolor=color.orange, size=size.tiny)
+        nyLowLbl   := label.new(bar_index, nyLow,  "NY L", style=label.style_label_left, color=color.new(color.orange, 100), textcolor=color.orange, size=size.tiny)
+    else
+        line.set_xy2(nyHighLine, bar_index, nyHigh)
+        line.set_xy2(nyLowLine, bar_index, nyLow)
+        label.set_x(nyHighLbl, bar_index)
+        label.set_x(nyLowLbl, bar_index)
+        label.set_y(nyHighLbl, nyHigh)
+        label.set_y(nyLowLbl, nyLow)
 
 // ============================================================
 // BIAS TABLE
