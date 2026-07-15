@@ -16,13 +16,15 @@ Architecture decision: everything is detected and drawn **natively in Pine Scrip
 
 | Concept | Status | Logic |
 |---|---|---|
-| Trend bias (uptrend/downtrend/range) | ✅ v1 | Compares last two confirmed swing highs/lows (HH/HL = uptrend, LH/LL = downtrend), shown in a top-right table |
+| Trend bias (uptrend/downtrend/range) | ✅ v1, live override v4 (2026-07-15) | Compares last two confirmed swing highs/lows (HH/HL = uptrend, LH/LL = downtrend); a live/unconfirmed BOS (`liveBullBOS`/`liveBearBOS`) now overrides it immediately instead of waiting up to `swingLen` bars for the next confirmed pair, tagged "(live)" in the top-right table until structure confirms it |
 | Break of Structure (BOS) | ✅ v1 | `close` crosses the last confirmed swing high/low |
 | Liquidity sweep | ✅ v1 | Wick trades beyond a swing high/low but closes back inside it; only flags once per level |
 | Fair Value Gap (FVG) | ✅ v1 | Classic 3-candle imbalance (`low > high[2]` / `high < low[2]`); box extends right only while unmitigated, freezes once price trades back through it |
 | Order Block | ✅ v1 (simplified) | Last opposite-colour candle before a BOS impulse, searched back up to `obLookback` bars; box freezes once mitigated (price closes back through it) |
 | Equilibrium / premium-discount | ✅ v1 | 50% midpoint of the current swing range (last swing high ↔ last swing low), with shaded premium/discount zones |
 | Live (unconfirmed) swing high/low + live BOS | ✅ v2 (2026-07-15) | Rolling `ta.highest`/`ta.lowest` over a `swingLen`-derived window — no right-side confirmation bars needed, so it reacts intrabar instead of lagging `swingLen` bars behind the confirmed pivots above. Plotted as dotted yellow/orange circles; a "BOS?" triangle marks when price crosses it live. Toggle via `showLiveSwing` / `showLiveBOS`. |
+| Previous Day/Week High-Low (PDH/PDL/PWH/PWL) | ✅ v3 (2026-07-15) | Non-repainting via `request.security(..., [high[1], low[1]], lookahead=barmerge.lookahead_off)` on `"D"`/`"W"` — always the last *completed* day/week. Silver dashed lines for day, blue dotted for week, each labeled and extending from the start of that day/week to the current bar. Toggle via `showPDHL` / `showPWHL`. |
+| Session highs/lows (Asia/London/NY) | ✅ v3 (2026-07-15) | Tracks the running high/low while each session (`input.session`, default Asia 1900-0400 / London 0300-1200 / NY 0800-1700, all America/New_York) is active; the line freezes and keeps extending right once the session ends, until the next occurrence resets it. Purple/blue/orange lines labeled "ASIA H/L", "LDN H/L", "NY H/L". Toggle via `showSessions`. |
 
 ### Doji patterns (exact set requested, each with its own show/hide input)
 
@@ -48,6 +50,7 @@ Only the exact 8 color/shape combos above are marked (e.g. red dragonfly and gre
 - No alerts wired up for any of these conditions yet
 - Second instrument mentioned early on ("pound is the main one, second is GBP/USD") was clarified to mean GBPUSD is the only instrument for now — revisit if a second pair/cross is actually wanted later
 - Doji thresholds are heuristic defaults — tune `dojiBodyMaxPct` / `oppWickMaxPct` / `longLeggedWickMinPct` / `crossSymTolPct` against real chart examples
+- Session windows (Asia/London/NY) default to commonly-used ET ranges (1900-0400 / 0300-1200 / 0800-1700) — tune via the `showSessions` group's session inputs if Keagan's actual trading hours differ.
 - Confirmed swing/BOS/Order Block structure still has an inherent `swingLen`-bar confirmation lag — `ta.pivothigh`/`ta.pivotlow` need that many bars *after* a pivot to validate it, which is fundamental to what ICT means by a "confirmed" swing, not a bug. The v2 live/unconfirmed layer (see table above) is the workaround for wanting a same-tick reaction; it can relabel which bar was the "swing" as new bars arrive, since it's provisional by design.
 
 ## Real-time behavior (added 2026-07-15)
