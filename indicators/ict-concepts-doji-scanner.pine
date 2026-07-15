@@ -25,6 +25,10 @@ oppWickMaxPct       = input.float(10.0, "Dragonfly/Gravestone Max Opposite Wick 
 longLeggedWickMinPct= input.float(35.0, "Long-Legged Min Wick Each Side (% of range)", minval=10, maxval=49, group=grpDoji) / 100
 crossSymTolPct      = input.float(15.0, "Cross Doji Wick Symmetry Tolerance (% of range)", minval=1, maxval=40, group=grpDoji) / 100
 
+grpRT = "Real-Time (Unconfirmed)"
+showLiveSwing   = input.bool(true, "Show Live Swing High/Low (no confirmation lag)", group=grpRT)
+showLiveBOS     = input.bool(true, "Show Live BOS (reacts intrabar, unconfirmed)", group=grpRT)
+
 // ============================================================
 // STRUCTURE: swing pivots, bias, BOS, liquidity sweeps
 // ============================================================
@@ -49,6 +53,24 @@ if not na(pl)
     lastSwingLow := pl
     lastSwingLowBar := bar_index - swingLen
 
+// Live (unconfirmed) swing high/low — a rolling extreme that needs no
+// right-side confirmation bars, so it reacts to price immediately/intrabar
+// instead of lagging swingLen bars behind like the confirmed pivots above.
+rtWindow = swingLen * 2 + 1
+liveSwingHigh = ta.highest(high, rtWindow)
+liveSwingLow  = ta.lowest(low, rtWindow)
+
+plot(showLiveSwing ? liveSwingHigh : na, title="Live Swing High", color=color.new(color.yellow, 55), style=plot.style_circles, linewidth=1)
+plot(showLiveSwing ? liveSwingLow  : na, title="Live Swing Low",  color=color.new(color.orange, 55), style=plot.style_circles, linewidth=1)
+
+liveCrossUp   = ta.crossover(close, liveSwingHigh[1])
+liveCrossDown = ta.crossunder(close, liveSwingLow[1])
+liveBullBOS = showLiveBOS and liveCrossUp
+liveBearBOS = showLiveBOS and liveCrossDown
+
+plotshape(liveBullBOS, title="Live BOS Up",   style=shape.triangleup,   location=location.belowbar, color=color.yellow, text="BOS?", textcolor=color.yellow, size=size.tiny)
+plotshape(liveBearBOS, title="Live BOS Down", style=shape.triangledown, location=location.abovebar, color=color.orange, text="BOS?", textcolor=color.orange, size=size.tiny)
+
 var string bias = "Range"
 if not na(lastSwingHigh) and not na(prevSwingHigh) and not na(lastSwingLow) and not na(prevSwingLow)
     if lastSwingHigh > prevSwingHigh and lastSwingLow > prevSwingLow
@@ -59,16 +81,26 @@ if not na(lastSwingHigh) and not na(prevSwingHigh) and not na(lastSwingLow) and 
         bias := "Range"
 
 // Break of Structure
+// bar_index guards below stop this from stacking duplicate lines/labels: since
+// `close` is the live/still-forming price in real time, ta.crossover can flip
+// true more than once on the same unconfirmed bar as price chops around the
+// level. The guard lets it fire on the first tick that trips it (no waiting
+// for bar close) but only once per bar.
+var int lastBullBosBar = na
+var int lastBearBosBar = na
+
 crossedAboveHigh = ta.crossover(close, lastSwingHigh)
 crossedBelowLow  = ta.crossunder(close, lastSwingLow)
-bullBOS = showBOS and not na(lastSwingHigh) and crossedAboveHigh
-bearBOS = showBOS and not na(lastSwingLow) and crossedBelowLow
+bullBOS = showBOS and not na(lastSwingHigh) and crossedAboveHigh and bar_index != lastBullBosBar
+bearBOS = showBOS and not na(lastSwingLow) and crossedBelowLow and bar_index != lastBearBosBar
 
 if bullBOS
+    lastBullBosBar := bar_index
     line.new(lastSwingHighBar, lastSwingHigh, bar_index, lastSwingHigh, color=color.new(color.lime, 0), style=line.style_solid, width=1)
     label.new(bar_index, lastSwingHigh, "BOS", style=label.style_label_down, color=color.new(color.lime, 80), textcolor=color.lime, size=size.tiny)
 
 if bearBOS
+    lastBearBosBar := bar_index
     line.new(lastSwingLowBar, lastSwingLow, bar_index, lastSwingLow, color=color.new(color.red, 0), style=line.style_solid, width=1)
     label.new(bar_index, lastSwingLow, "BOS", style=label.style_label_up, color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
 
@@ -97,16 +129,24 @@ var float[] bullFvgBot = array.new_float()
 var box[]   bearFvgBox = array.new_box()
 var float[] bearFvgTop = array.new_float()
 
-bullishFVG = showFVG and low > high[2]
-bearishFVG = showFVG and high < low[2]
+// bar_index guards for the same intrabar-repaint reason as BOS above: `low`/
+// `high` are live on the still-forming bar, so the gap condition could flip
+// true on more than one tick of the same bar without this.
+var int lastBullFvgBar = na
+var int lastBearFvgBar = na
+
+bullishFVG = showFVG and low > high[2] and bar_index != lastBullFvgBar
+bearishFVG = showFVG and high < low[2] and bar_index != lastBearFvgBar
 
 if bullishFVG
+    lastBullFvgBar := bar_index
     b = box.new(bar_index[2], low, bar_index, high[2], border_color=color.new(color.lime, 60), bgcolor=color.new(color.lime, 88))
     label.new(bar_index[1], (low + high[2]) / 2, "FVG", style=label.style_label_left, color=color.new(color.lime, 100), textcolor=color.lime, size=size.tiny)
     array.push(bullFvgBox, b)
     array.push(bullFvgBot, high[2])
 
 if bearishFVG
+    lastBearFvgBar := bar_index
     b = box.new(bar_index[2], low[2], bar_index, high, border_color=color.new(color.red, 60), bgcolor=color.new(color.red, 88))
     label.new(bar_index[1], (low[2] + high) / 2, "FVG", style=label.style_label_left, color=color.new(color.red, 100), textcolor=color.red, size=size.tiny)
     array.push(bearFvgBox, b)

@@ -22,6 +22,7 @@ Architecture decision: everything is detected and drawn **natively in Pine Scrip
 | Fair Value Gap (FVG) | ✅ v1 | Classic 3-candle imbalance (`low > high[2]` / `high < low[2]`); box extends right only while unmitigated, freezes once price trades back through it |
 | Order Block | ✅ v1 (simplified) | Last opposite-colour candle before a BOS impulse, searched back up to `obLookback` bars; box freezes once mitigated (price closes back through it) |
 | Equilibrium / premium-discount | ✅ v1 | 50% midpoint of the current swing range (last swing high ↔ last swing low), with shaded premium/discount zones |
+| Live (unconfirmed) swing high/low + live BOS | ✅ v2 (2026-07-15) | Rolling `ta.highest`/`ta.lowest` over a `swingLen`-derived window — no right-side confirmation bars needed, so it reacts intrabar instead of lagging `swingLen` bars behind the confirmed pivots above. Plotted as dotted yellow/orange circles; a "BOS?" triangle marks when price crosses it live. Toggle via `showLiveSwing` / `showLiveBOS`. |
 
 ### Doji patterns (exact set requested, each with its own show/hide input)
 
@@ -47,6 +48,13 @@ Only the exact 8 color/shape combos above are marked (e.g. red dragonfly and gre
 - No alerts wired up for any of these conditions yet
 - Second instrument mentioned early on ("pound is the main one, second is GBP/USD") was clarified to mean GBPUSD is the only instrument for now — revisit if a second pair/cross is actually wanted later
 - Doji thresholds are heuristic defaults — tune `dojiBodyMaxPct` / `oppWickMaxPct` / `longLeggedWickMinPct` / `crossSymTolPct` against real chart examples
+- Confirmed swing/BOS/Order Block structure still has an inherent `swingLen`-bar confirmation lag — `ta.pivothigh`/`ta.pivotlow` need that many bars *after* a pivot to validate it, which is fundamental to what ICT means by a "confirmed" swing, not a bug. The v2 live/unconfirmed layer (see table above) is the workaround for wanting a same-tick reaction; it can relabel which bar was the "swing" as new bars arrive, since it's provisional by design.
+
+## Real-time behavior (added 2026-07-15)
+
+- Doji, FVG, and liquidity-sweep detection already react on every realtime tick by default (Pine indicators recalculate the still-forming bar on each price update) — no code gate was holding them to bar-close.
+- Fixed a latent repaint bug: confirmed-BOS and FVG object creation (`line.new`/`box.new`) used live `close`/`high`/`low` inside a one-shot condition with no per-bar guard, so a price chopping back and forth around the level within a single unconfirmed bar could fire the condition on more than one tick and stack duplicate lines/boxes for what should be a single event. Added `bar_index`-based one-shot guards (`lastBullBosBar`/`lastBearBosBar`/`lastBullFvgBar`/`lastBearFvgBar`) — reacts on the first tick the condition trips, never duplicates. Order Block creation is nested under BOS so it inherited the fix for free.
+- Added a genuinely lag-free live swing high/low (rolling `ta.highest`/`ta.lowest`) and a "live BOS" marker built on it, since the confirmed pivots are structurally lagged by `swingLen` bars — see the table above.
 
 ## Next steps (add to as the project grows)
 
