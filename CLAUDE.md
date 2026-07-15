@@ -42,6 +42,10 @@ Other structure:
 - **`scripts/current.pine`** (gitignored scratch file) — working buffer for the Pine Editor push/pull scripts (`scripts/pine_push.js`, `scripts/pine_pull.js`), used by the `pine-develop` workflow.
 - **`ICT_STRATEGY_SPEC.md`** — living spec for an in-progress custom ICT/smart-money-concepts indicator built on top of this server; not part of the MCP server itself, just a working doc for that side project.
 
+### Trade alert watcher (SMS)
+
+`tv trade-alert check` (`src/core/trade_alert.js`) is a standalone, session-independent alert path — it does **not** go through Claude Code. It reuses `morning.runBrief()` to scan the watchlist, calls the Anthropic API directly (separate `ANTHROPIC_API_KEY`, billed per-token — see `.env.example`) with the same `rules.json` bias_criteria/risk_rules verbatim for a genuine structured-output confidence judgment, and texts the user via Twilio (`TWILIO_*` / `ALERT_*` env vars) when confidence crosses `ALERT_CONFIDENCE_THRESHOLD` (default 85). A cooldown (`ALERT_COOLDOWN_MINUTES`, default 120) per symbol+direction is tracked in `~/.tradingview-mcp/alert_state.json` to avoid repeat texts. Requires TradingView Desktop + CDP running, same as everything else here. Schedule it with `scripts/com.tradingview-mcp.trade-alert.plist.example` (macOS launchd) or an equivalent cron job — copy it, fill in the placeholders, and `launchctl load` it. Use `--dry-run` to test without sending texts or touching cooldown state.
+
 ### Known fragility
 
 - `pine_push.js` / `pine_pull.js` locate the Pine Editor's Monaco instance by walking React-fiber internals off `.monaco-editor.pine-editor-monaco` DOM nodes. TradingView can leave more than one such element in the DOM (a stale hidden instance ahead of the live one) — the code must scan all matches for the one whose fiber actually exposes a `monacoEnv`, not just take the first `querySelector` hit, or injection silently fails with "Could not inject into Pine editor".
