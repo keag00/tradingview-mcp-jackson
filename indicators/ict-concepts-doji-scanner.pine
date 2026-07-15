@@ -112,7 +112,7 @@ if bearishFVG
     array.push(bearFvgBox, b)
     array.push(bearFvgTop, low[2])
 
-if showFVG
+if showFVG and array.size(bullFvgBox) > 0
     for j = array.size(bullFvgBox) - 1 to 0
         bx = array.get(bullFvgBox, j)
         bot = array.get(bullFvgBot, j)
@@ -120,6 +120,7 @@ if showFVG
         if low <= bot
             array.remove(bullFvgBox, j)
             array.remove(bullFvgBot, j)
+if showFVG and array.size(bearFvgBox) > 0
     for j = array.size(bearFvgBox) - 1 to 0
         bx = array.get(bearFvgBox, j)
         top = array.get(bearFvgTop, j)
@@ -159,7 +160,7 @@ if bearBOS and showOB
             array.push(bearObTop, high[i])
             obFoundDown := true
 
-if showOB
+if showOB and array.size(bullObBox) > 0
     for j = array.size(bullObBox) - 1 to 0
         bx = array.get(bullObBox, j)
         bot = array.get(bullObBot, j)
@@ -167,6 +168,7 @@ if showOB
         if close < bot
             array.remove(bullObBox, j)
             array.remove(bullObBot, j)
+if showOB and array.size(bearObBox) > 0
     for j = array.size(bearObBox) - 1 to 0
         bx = array.get(bearObBox, j)
         top = array.get(bearObTop, j)
