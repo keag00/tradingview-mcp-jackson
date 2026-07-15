@@ -23,7 +23,7 @@ Architecture decision: everything is detected and drawn **natively in Pine Scrip
 | Order Block | ✅ v1 (simplified) | Last opposite-colour candle before a BOS impulse, searched back up to `obLookback` bars; box freezes once mitigated (price closes back through it) |
 | Equilibrium / premium-discount | ✅ v1 | 50% midpoint of the current swing range (last swing high ↔ last swing low), with shaded premium/discount zones |
 | Live (unconfirmed) swing high/low + live BOS | ✅ v2 (2026-07-15) | Rolling `ta.highest`/`ta.lowest` over a `swingLen`-derived window — no right-side confirmation bars needed, so it reacts intrabar instead of lagging `swingLen` bars behind the confirmed pivots above. Plotted as dotted yellow/orange circles; a "BOS?" triangle marks when price crosses it live. Toggle via `showLiveSwing` / `showLiveBOS`. |
-| Previous Day/Week High-Low (PDH/PDL/PWH/PWL) | ✅ v3 (2026-07-15) | Non-repainting via `request.security(..., [high[1], low[1]], lookahead=barmerge.lookahead_off)` on `"D"`/`"W"` — always the last *completed* day/week. Silver dashed lines for day, blue dotted for week, each labeled and extending from the start of that day/week to the current bar. Toggle via `showPDHL` / `showPWHL`. |
+| Previous Day/Week/Month High-Low (PDH/PDL/PWH/PWL/PMH/PML) | ✅ v3 (2026-07-15) | Non-repainting via `request.security(..., [high[1], low[1]], lookahead=barmerge.lookahead_off)` on `"D"`/`"W"`/`"M"` — always the last *completed* day/week/month. Silver dashed lines for day, blue dotted for week, fuchsia solid for month, each labeled and extending from the start of that period to the current bar. Toggle via `showPDHL` / `showPWHL` / `showPMHL`. (The month layer was added directly in the TradingView editor and this spec/repo copy hadn't caught up until the alerts pass below — noting here so the drift doesn't happen again.) |
 | Session highs/lows (Asia/London/NY) | ✅ v3 (2026-07-15) | Tracks the running high/low while each session (`input.session`, default Asia 1900-0400 / London 0300-1200 / NY 0800-1700, all America/New_York) is active; the line freezes and keeps extending right once the session ends, until the next occurrence resets it. Purple/blue/orange lines labeled "ASIA H/L", "LDN H/L", "NY H/L". Toggle via `showSessions`. |
 
 ### Doji patterns (exact set requested, each with its own show/hide input)
@@ -46,8 +46,7 @@ Only the exact 8 color/shape combos above are marked (e.g. red dragonfly and gre
 ## Known caveats / not yet done
 
 - Order Block detection is a simplified heuristic (nearest opposite-colour candle before a BOS), not full ICT nuance (no distinction between breaker blocks, mitigation blocks, propulsion blocks, etc.)
-- No backtesting/statistics on any of these signals yet — purely visual markup
-- No alerts wired up for any of these conditions yet
+- No backtesting/statistics on any of these signals yet — purely visual markup. (Partially addressed outside this indicator: the MCP server now has a replay-backtest journal — `replay_trade`/`journal_stats` — for testing `rules.json` bias criteria against history; the indicator's own signals still aren't tied into it.)
 - Second instrument mentioned early on ("pound is the main one, second is GBP/USD") was clarified to mean GBPUSD is the only instrument for now — revisit if a second pair/cross is actually wanted later
 - Doji thresholds are heuristic defaults — tune `dojiBodyMaxPct` / `oppWickMaxPct` / `longLeggedWickMinPct` / `crossSymTolPct` against real chart examples
 - Session windows (Asia/London/NY) default to commonly-used ET ranges (1900-0400 / 0300-1200 / 0800-1700) — tune via the `showSessions` group's session inputs if Keagan's actual trading hours differ.
@@ -58,6 +57,10 @@ Only the exact 8 color/shape combos above are marked (e.g. red dragonfly and gre
 - Doji, FVG, and liquidity-sweep detection already react on every realtime tick by default (Pine indicators recalculate the still-forming bar on each price update) — no code gate was holding them to bar-close.
 - Fixed a latent repaint bug: confirmed-BOS and FVG object creation (`line.new`/`box.new`) used live `close`/`high`/`low` inside a one-shot condition with no per-bar guard, so a price chopping back and forth around the level within a single unconfirmed bar could fire the condition on more than one tick and stack duplicate lines/boxes for what should be a single event. Added `bar_index`-based one-shot guards (`lastBullBosBar`/`lastBearBosBar`/`lastBullFvgBar`/`lastBearFvgBar`) — reacts on the first tick the condition trips, never duplicates. Order Block creation is nested under BOS so it inherited the fix for free.
 - Added a genuinely lag-free live swing high/low (rolling `ta.highest`/`ta.lowest`) and a "live BOS" marker built on it, since the confirmed pivots are structurally lagged by `swingLen` bars — see the table above.
+
+## Alerts (added 2026-07-15)
+
+`alertcondition()` calls are now wired up for the three actionable confirmed signals — **BOS** (bull/bear), **liquidity sweep** (high/low), and **FVG formed** (bull/bear) — 6 conditions total, selectable in TradingView's Alert dialog under this indicator's name. Doji patterns, order blocks, and PDH/PDL/session sweeps intentionally have no alerts, to keep the dropdown from turning into noise.
 
 ## Next steps (add to as the project grows)
 
