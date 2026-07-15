@@ -10,10 +10,28 @@ import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import * as morning from "./morning.js";
+import * as capture from "./capture.js";
 
 const STATE_DIR = join(homedir(), ".tradingview-mcp");
 const STATE_PATH = join(STATE_DIR, "alert_state.json");
+
+const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+const TUNNEL_STARTUP_TIMEOUT_MS = 20000;
+// cloudflared's quick-tunnel DNS record can take ~10-20s to propagate after
+// the URL is printed — polling until the tunnel actually answers avoids
+// handing Twilio a MediaUrl that isn't resolvable yet (Twilio does not retry).
+// A query made too early gets negatively cached by the resolver and poisons
+// every retry after it, so wait out an initial grace period untested before
+// polling at all — confirmed empirically: 0 grace period never recovers
+// within 30s of retries, a 12s grace period succeeds on the first poll.
+const TUNNEL_READY_GRACE_MS = 12000;
+const TUNNEL_READY_TIMEOUT_MS = 30000;
+const TUNNEL_READY_POLL_MS = 2000;
+const DELIVERY_POLL_MS = 2000;
+const DELIVERY_TIMEOUT_MS = 45000;
 
 const SIGNAL_SCHEMA = {
   type: "object",
@@ -109,7 +127,7 @@ async function evaluateSignals({ rules, symbolsScanned }) {
   }));
 }
 
-async function sendSms({ to, from, body }) {
+function twilioAuthHeader() {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   if (!sid || !token) {
@@ -117,22 +135,29 @@ async function sendSms({ to, from, body }) {
       "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set — see .env.example",
     );
   }
+  return { sid, header: `Basic ${Buffer.from(`${sid}:${token}`).toString("base64")}` };
+}
+
+async function sendSms({ to, from, body, mediaUrl }) {
+  const { sid, header } = twilioAuthHeader();
   if (!to || !from) {
     throw new Error(
       "ALERT_TO_NUMBER / TWILIO_FROM_NUMBER not set — see .env.example",
     );
   }
 
-  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const params = { To: to, From: from, Body: body };
+  if (mediaUrl) params.MediaUrl = mediaUrl;
+
   const resp = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
     {
       method: "POST",
       headers: {
-        Authorization: `Basic ${auth}`,
+        Authorization: header,
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: new URLSearchParams({ To: to, From: from, Body: body }),
+      body: new URLSearchParams(params),
     },
   );
   const data = await resp.json();
@@ -142,6 +167,113 @@ async function sendSms({ to, from, body }) {
     );
   }
   return data;
+}
+
+async function waitForMessageDelivery(messageSid) {
+  const { sid, header } = twilioAuthHeader();
+  const deadline = Date.now() + DELIVERY_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, DELIVERY_POLL_MS));
+    const resp = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages/${messageSid}.json`,
+      { headers: { Authorization: header } },
+    );
+    const data = await resp.json();
+    if (["delivered", "sent", "failed", "undelivered"].includes(data.status)) {
+      return data.status;
+    }
+  }
+  return "timeout";
+}
+
+/**
+ * Serves `filePath` over a loopback-only HTTP server and exposes it via a
+ * cloudflared "quick tunnel" (no account/config needed) so Twilio's servers
+ * can fetch it as MMS media. Caller must call the returned cleanup() once
+ * delivery is confirmed (or times out) to tear down the tunnel + server.
+ */
+async function startImageTunnel(filePath) {
+  const imageBuffer = readFileSync(filePath);
+  const server = createServer((req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "image/png",
+      "Content-Length": imageBuffer.length,
+    });
+    res.end(req.method === "HEAD" ? undefined : imageBuffer);
+  });
+
+  await new Promise((resolve, reject) => {
+    server.listen(0, "127.0.0.1", resolve);
+    server.once("error", reject);
+  });
+  const port = server.address().port;
+
+  const cloudflared = spawn(
+    "cloudflared",
+    ["tunnel", "--url", `http://127.0.0.1:${port}`],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+
+  const cleanup = () => {
+    cloudflared.kill();
+    server.close();
+  };
+
+  try {
+    const tunnelUrl = await new Promise((resolve, reject) => {
+      let output = "";
+      const timeout = setTimeout(() => {
+        reject(new Error("Timed out waiting for cloudflared tunnel URL"));
+      }, TUNNEL_STARTUP_TIMEOUT_MS);
+
+      const onData = (chunk) => {
+        output += chunk.toString();
+        const match = output.match(TUNNEL_URL_REGEX);
+        if (match) {
+          clearTimeout(timeout);
+          resolve(match[0]);
+        }
+      };
+      cloudflared.stdout.on("data", onData);
+      cloudflared.stderr.on("data", onData);
+      cloudflared.once("error", (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+      cloudflared.once("exit", (code) => {
+        if (code !== 0 && code !== null) {
+          clearTimeout(timeout);
+          reject(new Error(`cloudflared exited early with code ${code}`));
+        }
+      });
+    });
+
+    await new Promise((r) => setTimeout(r, TUNNEL_READY_GRACE_MS));
+
+    const deadline = Date.now() + TUNNEL_READY_TIMEOUT_MS;
+    let ready = false;
+    while (Date.now() < deadline) {
+      try {
+        const resp = await fetch(tunnelUrl, { method: "HEAD" });
+        if (resp.ok) {
+          ready = true;
+          break;
+        }
+      } catch {
+        // DNS/tunnel not propagated yet — keep polling until the deadline.
+      }
+      await new Promise((r) => setTimeout(r, TUNNEL_READY_POLL_MS));
+    }
+    if (!ready) {
+      throw new Error("Tunnel never became reachable before timeout");
+    }
+
+    return { url: tunnelUrl, cleanup };
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
 }
 
 export async function checkForSignals({ rules_path, dry_run = false } = {}) {
@@ -177,18 +309,46 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
     const lastSent = state[key] ? new Date(state[key]).getTime() : 0;
     if (now - lastSent < cooldownMs) continue;
 
+    const position = signal.direction === "bullish" ? "LONG" : "SHORT";
+    const moveWord = signal.direction === "bullish" ? "up" : "down";
+    const keyLevel = signal.key_level != null ? signal.key_level : "n/a";
     const body =
-      `${signal.symbol} ${signal.direction.toUpperCase()} ${signal.confidence}% — ${signal.reasoning}`.slice(
+      `${signal.symbol} — ${position} — ${signal.confidence}% probability it moves ${moveWord}. Key level: ${keyLevel}. ${signal.reasoning}`.slice(
         0,
         300,
       );
 
+    let photoAttached = false;
+
     if (!dry_run) {
-      await sendSms({
-        to: process.env.ALERT_TO_NUMBER,
-        from: process.env.TWILIO_FROM_NUMBER,
-        body,
-      });
+      let tunnel;
+      try {
+        const shot = await capture.captureScreenshot({
+          region: "chart",
+          filename: `alert_${signal.symbol}_${now}`,
+        });
+        if (shot.success && shot.file_path) {
+          tunnel = await startImageTunnel(shot.file_path);
+        }
+      } catch (err) {
+        // Photo attach is best-effort — never let it block the actual alert.
+        console.error(`Photo attach skipped: ${err.message}`);
+      }
+
+      try {
+        const sent = await sendSms({
+          to: process.env.ALERT_TO_NUMBER,
+          from: process.env.TWILIO_FROM_NUMBER,
+          body,
+          mediaUrl: tunnel?.url,
+        });
+        photoAttached = Boolean(tunnel);
+
+        if (tunnel) await waitForMessageDelivery(sent.sid);
+      } finally {
+        tunnel?.cleanup();
+      }
+
       state[key] = new Date(now).toISOString();
     }
 
@@ -197,6 +357,7 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
       direction: signal.direction,
       confidence: signal.confidence,
       body,
+      photo_attached: photoAttached,
       sent: !dry_run,
     });
   }
