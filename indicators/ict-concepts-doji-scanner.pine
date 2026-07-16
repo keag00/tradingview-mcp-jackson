@@ -38,6 +38,18 @@ asiaSession   = input.session("1900-0400", "Asia Session (ET)", group=grpSess)
 londonSession = input.session("0300-1200", "London Session (ET)", group=grpSess)
 nySession     = input.session("0800-1700", "New York Session (ET)", group=grpSess)
 
+grpMacro = "Macro / News Context (manual)"
+macroBias       = input.string("Bullish", "Fundamental Bias for this pair", options=["Bullish", "Bearish", "Neutral"], group=grpMacro, tooltip="Bullish = GBP strength / USD softening. Pine can't fetch live news — update this by hand whenever you refresh your macro research.")
+macroNote       = input.string("Cooling US CPI + dovish Fed Chair testimony pressuring USD (research dated 2026-07-15)", "Macro Note (shown on BIAS table hover)", group=grpMacro)
+showMacroEvents = input.bool(true, "Show High-Impact Event Markers", group=grpMacro)
+blackoutMins    = input.int(15, "No-Trade Window After Event (minutes)", minval=0, maxval=120, group=grpMacro)
+event1Time      = input.time(timestamp("2026-07-14 08:30 -0400"), "Event 1 Time (ET)", group=grpMacro)
+event1Label     = input.string("CPI Release", "Event 1 Label", group=grpMacro)
+event2Time      = input.time(timestamp("2026-07-14 10:00 -0400"), "Event 2 Time (ET)", group=grpMacro)
+event2Label     = input.string("Fed Chair Testimony", "Event 2 Label", group=grpMacro)
+event3Time      = input.time(timestamp("2026-07-17 10:00 -0400"), "Event 3 Time (ET)", group=grpMacro)
+event3Label     = input.string("Consumer Sentiment (Prelim)", "Event 3 Label", group=grpMacro)
+
 // ============================================================
 // STRUCTURE: swing pivots, bias, BOS, liquidity sweeps
 // ============================================================
@@ -752,12 +764,42 @@ if showSessions and not na(nyHigh)
     nyLowLbl   := label.new(bar_index, nyLow,  "NY L", style=label.style_label_left, color=color.new(color.orange, 100), textcolor=color.orange, size=size.tiny)
 
 // ============================================================
+// MACRO EVENT MARKERS — manually-entered high-impact news times
+// Pine Script has no live internet access, so these times/labels are
+// hand-entered from macro research and must be refreshed by hand whenever
+// new events are researched. Draws a vertical marker + label at the bar
+// each event time is first reached, plus a shaded background for
+// `blackoutMins` after each — a visual nudge for the risk_rules habit of
+// not trading around high-impact news.
+// ============================================================
+event1Hit = showMacroEvents and time >= event1Time and time[1] < event1Time
+event2Hit = showMacroEvents and time >= event2Time and time[1] < event2Time
+event3Hit = showMacroEvents and time >= event3Time and time[1] < event3Time
+
+if event1Hit
+    line.new(bar_index, low, bar_index, high, color=color.new(color.yellow, 0), style=line.style_dashed, width=2, extend=extend.both)
+    label.new(bar_index, high, event1Label, style=label.style_label_down, color=color.new(color.yellow, 70), textcolor=color.black, size=size.small)
+if event2Hit
+    line.new(bar_index, low, bar_index, high, color=color.new(color.yellow, 0), style=line.style_dashed, width=2, extend=extend.both)
+    label.new(bar_index, high, event2Label, style=label.style_label_down, color=color.new(color.yellow, 70), textcolor=color.black, size=size.small)
+if event3Hit
+    line.new(bar_index, low, bar_index, high, color=color.new(color.yellow, 0), style=line.style_dashed, width=2, extend=extend.both)
+    label.new(bar_index, high, event3Label, style=label.style_label_down, color=color.new(color.yellow, 70), textcolor=color.black, size=size.small)
+
+inBlackout1 = showMacroEvents and time >= event1Time and time < event1Time + blackoutMins * 60000
+inBlackout2 = showMacroEvents and time >= event2Time and time < event2Time + blackoutMins * 60000
+inBlackout3 = showMacroEvents and time >= event3Time and time < event3Time + blackoutMins * 60000
+bgcolor(inBlackout1 or inBlackout2 or inBlackout3 ? color.new(color.yellow, 85) : na, title="Macro Event No-Trade Window")
+
+// ============================================================
 // BIAS TABLE
 // ============================================================
 if showBias and barstate.islast
-    var table biasTable = table.new(position.top_right, 1, 1, border_width=1)
+    var table biasTable = table.new(position.top_right, 1, 2, border_width=1)
     biasColor = bias == "Uptrend" ? color.new(color.lime, 70) : bias == "Downtrend" ? color.new(color.red, 70) : color.new(color.gray, 70)
     table.cell(biasTable, 0, 0, "BIAS: " + bias + (biasLive ? " (live)" : ""), text_color=color.white, bgcolor=biasColor)
+    macroColor = macroBias == "Bullish" ? color.new(color.lime, 70) : macroBias == "Bearish" ? color.new(color.red, 70) : color.new(color.gray, 70)
+    table.cell(biasTable, 0, 1, "MACRO: " + macroBias, text_color=color.white, bgcolor=macroColor, tooltip=macroNote)
 
 // ============================================================
 // DOJI PATTERN DETECTION
