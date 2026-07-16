@@ -47,8 +47,7 @@ Only the exact 8 color/shape combos above are marked (e.g. red dragonfly and gre
 ## Known caveats / not yet done
 
 - Order Block detection is a simplified heuristic (nearest opposite-colour candle before a BOS), not full ICT nuance (no distinction between breaker blocks, mitigation blocks, propulsion blocks, etc.)
-- No backtesting/statistics on any of these signals yet — purely visual markup
-- No alerts wired up for any of these conditions yet
+- No backtesting/statistics on any of these signals yet — purely visual markup. (Partially addressed outside this indicator: the MCP server now has a replay-backtest journal — `replay_trade`/`journal_stats` — for testing `rules.json` bias criteria against history; the indicator's own signals still aren't tied into it.)
 - Second instrument mentioned early on ("pound is the main one, second is GBP/USD") was clarified to mean GBPUSD is the only instrument for now — revisit if a second pair/cross is actually wanted later
 - Doji thresholds are heuristic defaults — tune `dojiBodyMaxPct` / `oppWickMaxPct` / `longLeggedWickMinPct` / `crossSymTolPct` against real chart examples
 - Session windows (Asia/London/NY) default to commonly-used ET ranges (1900-0400 / 0300-1200 / 0800-1700) — tune via the `showSessions` group's session inputs if Keagan's actual trading hours differ.
@@ -68,6 +67,10 @@ Only the exact 8 color/shape combos above are marked (e.g. red dragonfly and gre
 - Rewired all three to the idiomatic pattern: create the line/box/label objects once (`var ... = na`, create only when `na`), then move them in place on every other bar with `line.set_xy1`/`set_xy2`, `box.set_lefttop`/`set_rightbottom`, `label.set_x`/`set_y` instead of deleting and recreating. PDH/PWH and the session levels now only actually delete+recreate on the bar a new day/week/session instance begins (a handful of times a day) instead of every bar.
 - Also dropped the redundant `var bool obFound*` flags in the Order Block search loops in favor of an early `break` once the nearest opposite-colour candle is found, instead of always scanning the full `obLookback` range.
 - Visual behavior is unchanged — same lines, same values, same freeze-on-mitigation semantics — this is purely an internal efficiency fix. Verified via `tv pine analyze` (0 issues) and `tv pine check` (compiled successfully, 0 errors/0 warnings). Live in-app push (`tv pine set`) hit the known Monaco-fiber-tree fragility noted above and couldn't be used to visually re-confirm on this pass — worth a manual re-check in the TradingView Pine Editor next session.
+
+## Alerts (added 2026-07-15)
+
+`alertcondition()` calls are now wired up for the three actionable confirmed signals — **BOS** (bull/bear), **liquidity sweep** (high/low), and **FVG formed** (bull/bear) — 6 conditions total, selectable in TradingView's Alert dialog under this indicator's name. Doji patterns, order blocks, and PDH/PDL/session sweeps intentionally have no alerts, to keep the dropdown from turning into noise.
 
 ## Next steps (add to as the project grows)
 

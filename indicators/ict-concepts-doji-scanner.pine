@@ -623,32 +623,40 @@ if showSessions and not na(nyHigh)
     nyLowLbl   := label.new(bar_index, nyLow,  "NY L", style=label.style_label_left, color=color.new(color.orange, 100), textcolor=color.orange, size=size.tiny)
 
 // ============================================================
-// PREVIOUS DAY / WEEK HIGH & LOW
-// Non-repainting: request.security with [1] on the daily/weekly series
-// always reads the last *completed* day/week, never the one in progress.
+// PREVIOUS DAY / WEEK / MONTH HIGH & LOW
+// Non-repainting: request.security with [1] on the daily/weekly/monthly series
+// always reads the last *completed* day/week/month, never the one in progress.
 // ============================================================
 [pdHigh, pdLow] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_off)
 [pwHigh, pwLow] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[pmHigh, pmLow] = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead=barmerge.lookahead_off)
 
-// pdHigh/pwHigh only change value on the first intraday bar of a new day/week
-// (that's when request.security's [1]-lagged daily/weekly series rolls over),
-// so comparing against the previous bar's value doubles as a clean day/week
+// pdHigh/pwHigh/pmHigh only change value on the first intraday bar of a new
+// day/week/month (that's when request.security's [1]-lagged series rolls
+// over), so comparing against the previous bar's value doubles as a clean
 // boundary detector for anchoring the line's left edge.
-var int dayStartBar  = na
-var int weekStartBar = na
+var int dayStartBar   = na
+var int weekStartBar  = na
+var int monthStartBar = na
 if not na(pdHigh) and (na(pdHigh[1]) or pdHigh != pdHigh[1] or pdLow != pdLow[1])
     dayStartBar := bar_index
 if not na(pwHigh) and (na(pwHigh[1]) or pwHigh != pwHigh[1] or pwLow != pwLow[1])
     weekStartBar := bar_index
+if not na(pmHigh) and (na(pmHigh[1]) or pmHigh != pmHigh[1] or pmLow != pmLow[1])
+    monthStartBar := bar_index
 
 var line pdHighLine = na
 var line pdLowLine  = na
 var line pwHighLine = na
 var line pwLowLine  = na
+var line pmHighLine = na
+var line pmLowLine  = na
 var label pdHighLbl = na
 var label pdLowLbl  = na
 var label pwHighLbl = na
 var label pwLowLbl  = na
+var label pmHighLbl = na
+var label pmLowLbl  = na
 
 if showPDHL and not na(pdHigh)
     if not na(pdHighLine)
@@ -671,6 +679,17 @@ if showPWHL and not na(pwHigh)
     pwLowLine  := line.new(weekStartBar, pwLow,  bar_index, pwLow,  color=color.new(color.blue, 20), style=line.style_dotted, width=1)
     pwHighLbl  := label.new(bar_index, pwHigh, "PWH", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
     pwLowLbl   := label.new(bar_index, pwLow,  "PWL", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+
+if showPMHL and not na(pmHigh)
+    if not na(pmHighLine)
+        line.delete(pmHighLine)
+        line.delete(pmLowLine)
+        label.delete(pmHighLbl)
+        label.delete(pmLowLbl)
+    pmHighLine := line.new(monthStartBar, pmHigh, bar_index, pmHigh, color=color.new(color.fuchsia, 20), style=line.style_solid, width=2)
+    pmLowLine  := line.new(monthStartBar, pmLow,  bar_index, pmLow,  color=color.new(color.fuchsia, 20), style=line.style_solid, width=2)
+    pmHighLbl  := label.new(bar_index, pmHigh, "PMH", style=label.style_label_left, color=color.new(color.fuchsia, 100), textcolor=color.fuchsia, size=size.tiny)
+    pmLowLbl   := label.new(bar_index, pmLow,  "PML", style=label.style_label_left, color=color.new(color.fuchsia, 100), textcolor=color.fuchsia, size=size.tiny)
 
 // ============================================================
 // SESSION HIGHS/LOWS — Asia, London, New York
@@ -841,3 +860,15 @@ plotshape(markGreenCross,      title="Green Cross Doji",        style=shape.xcro
 plotshape(markRedCross,        title="Red Inverted Cross Doji", style=shape.xcross,  location=location.abovebar, color=color.red,    text="X",   textcolor=color.red,    size=size.tiny)
 plotshape(markGreenDragonfly,  title="Green Dragonfly Doji",    style=shape.triangleup,   location=location.belowbar, color=color.aqua,   text="DF",  textcolor=color.aqua,   size=size.tiny)
 plotshape(markRedGravestone,   title="Red Gravestone Doji",     style=shape.triangledown, location=location.abovebar, color=color.fuchsia,text="GS",  textcolor=color.fuchsia,size=size.tiny)
+
+// ============================================================
+// ALERTS — BOS, liquidity sweep, and FVG only (the actionable
+// confirmed signals); doji/OB/PDH-PDL intentionally excluded to
+// keep the alert dropdown from turning into noise.
+// ============================================================
+alertcondition(bullBOS,    title="Bullish BOS",            message="{{ticker}} {{interval}}: Bullish Break of Structure")
+alertcondition(bearBOS,    title="Bearish BOS",            message="{{ticker}} {{interval}}: Bearish Break of Structure")
+alertcondition(sweepHigh,  title="Liquidity Sweep (High)", message="{{ticker}} {{interval}}: Liquidity sweep above swing high")
+alertcondition(sweepLow,   title="Liquidity Sweep (Low)",  message="{{ticker}} {{interval}}: Liquidity sweep below swing low")
+alertcondition(bullishFVG, title="Bullish FVG Formed",     message="{{ticker}} {{interval}}: Bullish FVG formed")
+alertcondition(bearishFVG, title="Bearish FVG Formed",     message="{{ticker}} {{interval}}: Bearish FVG formed")
