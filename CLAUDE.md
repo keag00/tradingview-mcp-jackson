@@ -30,7 +30,7 @@ When changing anything under `src/`, prefer `npm run test:unit` first since it d
 
 Three interfaces share one core — always add new capability to `core/` first, then thin wrappers on top:
 
-- **`src/core/*.js`** — the actual logic. Talks to TradingView exclusively through `src/connection.js`, which holds a single retried CDP client and an `evaluate(expression)` helper that runs JS inside the TradingView page's context. `KNOWN_PATHS` in that file lists unofficial TradingView internals (e.g. `window.TradingViewApi._activeChartWidgetWV`) discovered by probing — see `RESEARCH.md` for how those were found.
+- **`src/core/*.js`** — the actual logic. Talks to TradingView exclusively through `src/connection.js`, which holds a single retried CDP client and an `evaluate(expression)` helper that runs JS inside the TradingView page's context. `KNOWN_PATHS` in that file lists unofficial TradingView internals (e.g. `window.TradingViewApi._activeChartWidgetWV`) discovered by probing — see `RESEARCH.md` for how those were found. `src/connection.js` also holds a *second*, independent CDP client (`getPineClient`/`evaluatePine`) pinned to a dedicated background TradingView tab reserved for Pine Editor work (see below) — everything in `src/core/pine.js` uses this second client instead of the main one.
 - **`src/tools/*.js`** — MCP tool definitions: zod input schema + call into the matching `core/*.js` function + `jsonResult()` (from `_format.js`) to wrap the response. Each file exports a `registerXTools(server)` function; all of them are registered in `src/server.js`, which also carries the tool-selection guide baked into the MCP server's `instructions` field.
 - **`src/cli/commands/*.js`** — CLI wrappers around the *same* core functions, exposed as the `tv` bin (`src/cli/index.js`) through a small zero-dependency router (`src/cli/router.js`, built on `node:util.parseArgs`).
 
@@ -40,6 +40,15 @@ Other structure:
 - **`skills/*/SKILL.md`** — step-by-step workflows for multi-tool tasks (`pine-develop`, `chart-analysis`, `multi-symbol-scan`, `replay-practice`, `strategy-report`). Read the relevant one before improvising a workflow that already has a documented procedure — `pine-develop` in particular defines the write → push → compile → fix-errors → screenshot loop for Pine Script work.
 - **`rules.json`** (tracked in git, `rules.example.json` is the blank template) — the user's watchlist, bias criteria, and risk rules; `morning_brief` reads it automatically.
 - **`scripts/current.pine`** (gitignored scratch file) — working buffer for the Pine Editor push/pull scripts (`scripts/pine_push.js`, `scripts/pine_pull.js`), used by the `pine-develop` workflow.
+
+### Pine Editor runs in a dedicated background tab
+
+All Pine Editor work (`src/core/pine.js`, `pine_push.js`, `pine_pull.js`, and every `pine_*` MCP/CLI tool) targets a separate TradingView tab from whatever chart the user is actively looking at, so editing/compiling never yanks focus or repaints their screen. Mechanics:
+
+- Every TradingView tab is its own CDP page target (this is also what `tab_list`/`tab_new`/`tab_switch` operate on — see `src/core/tab.js`). Connecting CDP directly to a target id (rather than calling `/json/activate/<id>`) does **not** bring it to the foreground, so JS injection, DOM clicks, and screenshots can run against a tab the user never sees.
+- The first time Pine work is needed, `connectPine()` in `src/connection.js` opens a new tab (Cmd/Ctrl+T sent to the user's current tab) and immediately re-activates the original tab — a single brief visible flash, one time only. That new tab's CDP target id is persisted to `~/.tradingview-mcp/pine_tab.json` and reused on every subsequent call (including across separate `tv pine ...` CLI invocations, each of which is a fresh process).
+- The main connection (`findChartTarget()` / `getClient()` / `evaluate()`, used by every non-Pine tool) explicitly excludes the persisted Pine tab id, so chart/data/alert tools never accidentally attach to it.
+- A compiled/saved Pine script lands on the **Pine tab's own chart**, not the user's main chart — it's a separate scratch chart. To get a finished indicator onto the chart the user is actually watching, add it there explicitly with `chart_manage_indicator` (by name) once it's ready, or `tab_switch` to the Pine tab (flagged `is_pine_tab: true` in `tab_list` output) to inspect it directly.
 - **`ICT_STRATEGY_SPEC.md`** — living spec for an in-progress custom ICT/smart-money-concepts indicator built on top of this server; not part of the MCP server itself, just a working doc for that side project.
 
 ### Trade alert watcher (Pushover)

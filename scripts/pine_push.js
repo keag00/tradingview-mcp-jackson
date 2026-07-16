@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-// Push scripts/current.pine → TradingView editor, then compile
-import CDP from 'chrome-remote-interface';
+// Push scripts/current.pine → TradingView editor, then compile.
+// Runs against the dedicated background Pine tab (see src/connection.js)
+// so it doesn't disrupt whatever chart is on screen.
 import { readFileSync } from 'fs';
+import { getPineClient } from '../src/connection.js';
+import { ensurePineEditorOpen } from '../src/core/pine.js';
 
 const srcPath = new URL('../scripts/current.pine', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
 const src = readFileSync(srcPath, 'utf-8');
 
-const targets = await (await fetch('http://localhost:9222/json/list')).json();
-const t = targets.find(t => t.url?.includes('tradingview.com'));
-if (!t) { console.error('No TradingView target'); process.exit(1); }
-const c = await CDP({ host: 'localhost', port: 9222, target: t.id });
-await c.Runtime.enable();
+const editorReady = await ensurePineEditorOpen();
+if (!editorReady) { console.error('Could not open Pine Editor in the background tab'); process.exit(1); }
+const c = await getPineClient();
 
 // Inject source. There can be multiple .monaco-editor.pine-editor-monaco
 // elements in the DOM (e.g. a stale hidden instance from a previous panel
