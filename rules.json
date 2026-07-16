@@ -1,31 +1,36 @@
 {
-  "watchlist": ["BTCUSD", "ETHUSD", "SOLUSD"],
-  "default_timeframe": "240",
+  "watchlist": ["OANDA:GBPUSD"],
+  "default_timeframe": "5",
+  "scan_timeframes": ["15", "5", "1"],
 
   "bias_criteria": {
     "bullish": [
-      "Ribbon direction is up (bullish colour)",
-      "Price is above the 20 EMA on the 4H",
-      "RSI is below 60 (room to run)"
+      "The ICT Concepts + Doji Scanner's trend-bias table reads Uptrend (HH/HL structure)",
+      "A bullish Break of Structure has printed — confirmed or the live/unconfirmed BOS marker",
+      "Price is trading in the discount zone (below the indicator's 50% equilibrium line for the current swing range)",
+      "An unmitigated bullish Fair Value Gap or bullish Order Block sits nearby as support",
+      "A bullish reversal doji (Green Dragonfly, Green Doji, Green Cross, or Green Long-Legged) is printing at that support, or a liquidity sweep of a recent swing low just fired"
     ],
     "bearish": [
-      "Ribbon direction is down (bearish colour)",
-      "Price is below the 20 EMA on the 4H",
-      "RSI is above 40 (room to drop)"
+      "The trend-bias table reads Downtrend (LH/LL structure)",
+      "A bearish Break of Structure has printed — confirmed or the live/unconfirmed BOS marker",
+      "Price is trading in the premium zone (above the 50% equilibrium line)",
+      "An unmitigated bearish Fair Value Gap or bearish Order Block sits nearby as resistance",
+      "A bearish reversal doji (Red Gravestone, Red Doji, Red Inverted Cross, or Red Long-Legged) is printing at that resistance, or a liquidity sweep of a recent swing high just fired"
     ],
     "neutral": [
-      "Ribbon is flat or mixed",
-      "Price is chopping around the 20 EMA",
-      "RSI is between 45 and 55"
+      "The trend-bias table reads Range, or the last BOS was invalidated",
+      "Price is sitting near the equilibrium midpoint with no doji signal printing",
+      "No unmitigated FVG or Order Block is within reach of current price"
     ]
   },
 
   "risk_rules": [
     "Only take trades where R:R is at least 1:2",
-    "No trading in the first 15 minutes of the NY session open",
+    "No trading in the first 15 minutes of the London or NY session open (kill-zone volatility)",
     "Maximum 2 open positions at once",
     "If I have 2 losing trades in a row, stop for the day"
   ],
 
-  "notes": "Add any other context you want Claude to factor in — e.g. macro events this week, key dates, anything that should affect your bias."
+  "notes": "GBPUSD via OANDA — do not use bare GBPUSD or FX:GBPUSD, they can resolve to the wrong instrument on this account (see ICT_STRATEGY_SPEC.md). Factor in BoE/Fed rate decisions and other macro events this week if relevant."
 }
