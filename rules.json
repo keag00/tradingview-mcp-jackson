@@ -1,6 +1,7 @@
 {
   "watchlist": ["OANDA:GBPUSD"],
   "default_timeframe": "5",
+  "scan_timeframes": ["15", "5", "1"],
 
   "bias_criteria": {
     "bullish": [

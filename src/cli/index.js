@@ -9,7 +9,7 @@
  * Pipe-friendly: every command outputs JSON for use with jq.
  */
 
-// Load .env (TWILIO_*, ANTHROPIC_*, ALERT_* — see .env.example) before anything else
+// Load .env (PUSHOVER_*, ANTHROPIC_*, ALERT_* — see .env.example) before anything else
 import "dotenv/config";
 
 // Register all commands

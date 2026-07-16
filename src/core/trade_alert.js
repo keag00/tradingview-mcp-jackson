@@ -1,7 +1,7 @@
 /**
  * Trade alert watcher — scans the watchlist, asks Claude for a genuine
  * confidence read against the user's rules.json bias/risk criteria, and
- * texts the user (via Twilio) when confidence crosses a threshold.
+ * notifies the user (via Pushover) when confidence crosses a threshold.
  *
  * Designed to run standalone (no live Claude Code session) via `tv alert check`
  * on a schedule (cron/launchd) — see scripts/com.tradingview-mcp.trade-alert.plist.example.
@@ -10,28 +10,15 @@ import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
-import { createServer } from "node:http";
 import * as morning from "./morning.js";
 import * as capture from "./capture.js";
+import * as chart from "./chart.js";
+import * as data from "./data.js";
 
 const STATE_DIR = join(homedir(), ".tradingview-mcp");
 const STATE_PATH = join(STATE_DIR, "alert_state.json");
 
-const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
-const TUNNEL_STARTUP_TIMEOUT_MS = 20000;
-// cloudflared's quick-tunnel DNS record can take ~10-20s to propagate after
-// the URL is printed — polling until the tunnel actually answers avoids
-// handing Twilio a MediaUrl that isn't resolvable yet (Twilio does not retry).
-// A query made too early gets negatively cached by the resolver and poisons
-// every retry after it, so wait out an initial grace period untested before
-// polling at all — confirmed empirically: 0 grace period never recovers
-// within 30s of retries, a 12s grace period succeeds on the first poll.
-const TUNNEL_READY_GRACE_MS = 12000;
-const TUNNEL_READY_TIMEOUT_MS = 30000;
-const TUNNEL_READY_POLL_MS = 2000;
-const DELIVERY_POLL_MS = 2000;
-const DELIVERY_TIMEOUT_MS = 45000;
+const PUSHOVER_API_URL = "https://api.pushover.net/1/messages.json";
 
 const SIGNAL_SCHEMA = {
   type: "object",
@@ -50,6 +37,10 @@ const SIGNAL_SCHEMA = {
             type: "integer",
             description: "0-100, how confident you are this is a high-conviction entry right now",
           },
+          entry_timeframe: {
+            type: "string",
+            description: "Which of the scanned timeframes actually contains the entry trigger (e.g. the doji/BOS/sweep), not necessarily the highest one scanned",
+          },
           key_level: { anyOf: [{ type: "number" }, { type: "null" }] },
           reasoning: { type: "string" },
         },
@@ -57,6 +48,7 @@ const SIGNAL_SCHEMA = {
           "symbol",
           "direction",
           "confidence",
+          "entry_timeframe",
           "key_level",
           "reasoning",
         ],
@@ -67,6 +59,61 @@ const SIGNAL_SCHEMA = {
   required: ["signals"],
   additionalProperties: false,
 };
+
+/**
+ * Scans each watchlist symbol across every timeframe in rules.scan_timeframes
+ * (falling back to just default_timeframe if unset), so the model can reason
+ * about higher-timeframe bias/structure vs. lower-timeframe entry triggers —
+ * standard ICT multi-timeframe confluence — instead of a single snapshot.
+ */
+async function scanMultiTimeframe({ rules }) {
+  const { watchlist = [], default_timeframe = "240", scan_timeframes } = rules;
+  const timeframes =
+    scan_timeframes && scan_timeframes.length
+      ? scan_timeframes
+      : [default_timeframe];
+
+  let originalSymbol, originalTimeframe;
+  try {
+    const currentState = await chart.getState();
+    originalSymbol = currentState.symbol;
+    originalTimeframe = currentState.resolution;
+  } catch (_) {}
+
+  const results = [];
+  for (const symbol of watchlist) {
+    const perTimeframe = [];
+    for (const timeframe of timeframes) {
+      try {
+        await chart.setSymbol({ symbol });
+        await new Promise((r) => setTimeout(r, 900));
+        await chart.setTimeframe({ timeframe });
+        await new Promise((r) => setTimeout(r, 900));
+
+        const [state, indicators, quote] = await Promise.all([
+          chart.getState(),
+          data.getStudyValues(),
+          data.getQuote({}),
+        ]);
+
+        perTimeframe.push({ timeframe, state, indicators, quote });
+      } catch (err) {
+        perTimeframe.push({ timeframe, error: err.message });
+      }
+    }
+    results.push({ symbol, timeframes: perTimeframe });
+  }
+
+  if (originalSymbol) {
+    try {
+      await chart.setSymbol({ symbol: originalSymbol });
+      if (originalTimeframe)
+        await chart.setTimeframe({ timeframe: originalTimeframe });
+    } catch (_) {}
+  }
+
+  return results;
+}
 
 function loadAlertState() {
   if (!existsSync(STATE_PATH)) return {};
@@ -98,6 +145,8 @@ async function evaluateSignals({ rules, symbolsScanned }) {
     system: [
       "You evaluate whether right now is a high-conviction trade entry, for a trader who only wants a text message when you are genuinely confident.",
       "Apply the user's bias_criteria and risk_rules literally to the indicator and price data given for each symbol — do not invent criteria that aren't there.",
+      "Each symbol includes data from multiple timeframes, ordered highest to lowest. Use the higher timeframe(s) to judge overall trend/structure/bias, and the lower timeframe(s) to time the precise entry trigger (doji, BOS, liquidity sweep) — standard multi-timeframe confluence. Only call it a real setup when the timeframes agree: don't take a lower-timeframe trigger against the higher-timeframe bias.",
+      "Set entry_timeframe to whichever timeframe actually shows the trigger, not just the highest one scanned.",
       "Be conservative: confidence should reflect real conviction, not enthusiasm. Most checks should NOT produce a high confidence score.",
       "direction 'neutral' means there is no actionable setup right now, regardless of confidence.",
     ].join(" "),
@@ -127,158 +176,49 @@ async function evaluateSignals({ rules, symbolsScanned }) {
   }));
 }
 
-function twilioAuthHeader() {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  if (!sid || !token) {
+/**
+ * Sends a Pushover notification, optionally with an image attached directly
+ * in the request body (Pushover accepts binary attachments up to 2.5MB —
+ * no public URL/tunnel needed, unlike Twilio MMS).
+ */
+async function sendPushover({ title, message, imagePath }) {
+  const token = process.env.PUSHOVER_API_TOKEN;
+  const user = process.env.PUSHOVER_USER_KEY;
+  if (!token || !user) {
     throw new Error(
-      "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set — see .env.example",
-    );
-  }
-  return { sid, header: `Basic ${Buffer.from(`${sid}:${token}`).toString("base64")}` };
-}
-
-async function sendSms({ to, from, body, mediaUrl }) {
-  const { sid, header } = twilioAuthHeader();
-  if (!to || !from) {
-    throw new Error(
-      "ALERT_TO_NUMBER / TWILIO_FROM_NUMBER not set — see .env.example",
+      "PUSHOVER_API_TOKEN / PUSHOVER_USER_KEY not set — see .env.example",
     );
   }
 
-  const params = { To: to, From: from, Body: body };
-  if (mediaUrl) params.MediaUrl = mediaUrl;
+  const form = new FormData();
+  form.append("token", token);
+  form.append("user", user);
+  form.append("title", title);
+  form.append("message", message);
+  if (imagePath) {
+    const buffer = readFileSync(imagePath);
+    form.append("attachment", new Blob([buffer], { type: "image/png" }), "chart.png");
+  }
 
-  const resp = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: header,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams(params),
-    },
-  );
+  const resp = await fetch(PUSHOVER_API_URL, { method: "POST", body: form });
   const data = await resp.json();
-  if (!resp.ok) {
+  if (!resp.ok || data.status !== 1) {
     throw new Error(
-      `Twilio error ${resp.status}: ${data.message || JSON.stringify(data)}`,
+      `Pushover error ${resp.status}: ${data.errors ? data.errors.join(", ") : JSON.stringify(data)}`,
     );
   }
   return data;
 }
 
-async function waitForMessageDelivery(messageSid) {
-  const { sid, header } = twilioAuthHeader();
-  const deadline = Date.now() + DELIVERY_TIMEOUT_MS;
-
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, DELIVERY_POLL_MS));
-    const resp = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages/${messageSid}.json`,
-      { headers: { Authorization: header } },
-    );
-    const data = await resp.json();
-    if (["delivered", "sent", "failed", "undelivered"].includes(data.status)) {
-      return data.status;
-    }
-  }
-  return "timeout";
-}
-
-/**
- * Serves `filePath` over a loopback-only HTTP server and exposes it via a
- * cloudflared "quick tunnel" (no account/config needed) so Twilio's servers
- * can fetch it as MMS media. Caller must call the returned cleanup() once
- * delivery is confirmed (or times out) to tear down the tunnel + server.
- */
-async function startImageTunnel(filePath) {
-  const imageBuffer = readFileSync(filePath);
-  const server = createServer((req, res) => {
-    res.writeHead(200, {
-      "Content-Type": "image/png",
-      "Content-Length": imageBuffer.length,
-    });
-    res.end(req.method === "HEAD" ? undefined : imageBuffer);
-  });
-
-  await new Promise((resolve, reject) => {
-    server.listen(0, "127.0.0.1", resolve);
-    server.once("error", reject);
-  });
-  const port = server.address().port;
-
-  const cloudflared = spawn(
-    "cloudflared",
-    ["tunnel", "--url", `http://127.0.0.1:${port}`],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
-
-  const cleanup = () => {
-    cloudflared.kill();
-    server.close();
-  };
-
-  try {
-    const tunnelUrl = await new Promise((resolve, reject) => {
-      let output = "";
-      const timeout = setTimeout(() => {
-        reject(new Error("Timed out waiting for cloudflared tunnel URL"));
-      }, TUNNEL_STARTUP_TIMEOUT_MS);
-
-      const onData = (chunk) => {
-        output += chunk.toString();
-        const match = output.match(TUNNEL_URL_REGEX);
-        if (match) {
-          clearTimeout(timeout);
-          resolve(match[0]);
-        }
-      };
-      cloudflared.stdout.on("data", onData);
-      cloudflared.stderr.on("data", onData);
-      cloudflared.once("error", (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-      cloudflared.once("exit", (code) => {
-        if (code !== 0 && code !== null) {
-          clearTimeout(timeout);
-          reject(new Error(`cloudflared exited early with code ${code}`));
-        }
-      });
-    });
-
-    await new Promise((r) => setTimeout(r, TUNNEL_READY_GRACE_MS));
-
-    const deadline = Date.now() + TUNNEL_READY_TIMEOUT_MS;
-    let ready = false;
-    while (Date.now() < deadline) {
-      try {
-        const resp = await fetch(tunnelUrl, { method: "HEAD" });
-        if (resp.ok) {
-          ready = true;
-          break;
-        }
-      } catch {
-        // DNS/tunnel not propagated yet — keep polling until the deadline.
-      }
-      await new Promise((r) => setTimeout(r, TUNNEL_READY_POLL_MS));
-    }
-    if (!ready) {
-      throw new Error("Tunnel never became reachable before timeout");
-    }
-
-    return { url: tunnelUrl, cleanup };
-  } catch (err) {
-    cleanup();
-    throw err;
-  }
-}
-
 export async function checkForSignals({ rules_path, dry_run = false } = {}) {
-  const brief = await morning.runBrief({ rules_path });
-  const symbolsScanned = brief.symbols_scanned.filter((s) => !s.error);
+  const { rules } = morning.loadRules(rules_path);
+  const scanned = await scanMultiTimeframe({ rules });
+  const symbolsScanned = scanned
+    .map((s) => ({
+      symbol: s.symbol,
+      timeframes: s.timeframes.filter((t) => !t.error),
+    }))
+    .filter((s) => s.timeframes.length > 0);
 
   if (!symbolsScanned.length) {
     return {
@@ -291,7 +231,7 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
     };
   }
 
-  const signals = await evaluateSignals({ rules: brief.rules, symbolsScanned });
+  const signals = await evaluateSignals({ rules, symbolsScanned });
 
   const threshold = Number(process.env.ALERT_CONFIDENCE_THRESHOLD || 85);
   const cooldownMs =
@@ -312,42 +252,38 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
     const position = signal.direction === "bullish" ? "LONG" : "SHORT";
     const moveWord = signal.direction === "bullish" ? "up" : "down";
     const keyLevel = signal.key_level != null ? signal.key_level : "n/a";
+    const entryTf = signal.entry_timeframe || rules.default_timeframe;
+    const title = `${signal.symbol} — ${position} (${entryTf}m)`;
     const body =
-      `${signal.symbol} — ${position} — ${signal.confidence}% probability it moves ${moveWord}. Key level: ${keyLevel}. ${signal.reasoning}`.slice(
+      `${signal.confidence}% probability it moves ${moveWord}. Entry timeframe: ${entryTf}. Key level: ${keyLevel}. ${signal.reasoning}`.slice(
         0,
-        300,
+        1024,
       );
 
     let photoAttached = false;
 
     if (!dry_run) {
-      let tunnel;
+      let imagePath;
       try {
+        // Re-point the chart to the exact symbol+timeframe the signal fired
+        // on, so the attached photo matches what triggered the alert.
+        await chart.setSymbol({ symbol: signal.symbol });
+        await new Promise((r) => setTimeout(r, 900));
+        await chart.setTimeframe({ timeframe: entryTf });
+        await new Promise((r) => setTimeout(r, 900));
+
         const shot = await capture.captureScreenshot({
           region: "chart",
           filename: `alert_${signal.symbol}_${now}`,
         });
-        if (shot.success && shot.file_path) {
-          tunnel = await startImageTunnel(shot.file_path);
-        }
+        if (shot.success && shot.file_path) imagePath = shot.file_path;
       } catch (err) {
         // Photo attach is best-effort — never let it block the actual alert.
         console.error(`Photo attach skipped: ${err.message}`);
       }
 
-      try {
-        const sent = await sendSms({
-          to: process.env.ALERT_TO_NUMBER,
-          from: process.env.TWILIO_FROM_NUMBER,
-          body,
-          mediaUrl: tunnel?.url,
-        });
-        photoAttached = Boolean(tunnel);
-
-        if (tunnel) await waitForMessageDelivery(sent.sid);
-      } finally {
-        tunnel?.cleanup();
-      }
+      await sendPushover({ title, message: body, imagePath });
+      photoAttached = Boolean(imagePath);
 
       state[key] = new Date(now).toISOString();
     }
@@ -356,6 +292,7 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
       symbol: signal.symbol,
       direction: signal.direction,
       confidence: signal.confidence,
+      title,
       body,
       photo_attached: photoAttached,
       sent: !dry_run,

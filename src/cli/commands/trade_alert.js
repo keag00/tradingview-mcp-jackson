@@ -3,13 +3,13 @@ import * as core from "../../core/trade_alert.js";
 
 register("trade-alert", {
   description:
-    "Check the watchlist for a high-conviction trade setup and text you if found",
+    "Check the watchlist for a high-conviction trade setup and notify you (Pushover) if found",
   subcommands: new Map([
     [
       "check",
       {
         description:
-          "Run one check cycle now: scan watchlist, ask Claude for a confidence read, text on high confidence",
+          "Run one check cycle now: scan watchlist, ask Claude for a confidence read, notify on high confidence",
         options: {
           rules: {
             type: "string",
@@ -19,7 +19,7 @@ register("trade-alert", {
           "dry-run": {
             type: "boolean",
             description:
-              "Evaluate and print what would be sent, without sending SMS or updating cooldown state",
+              "Evaluate and print what would be sent, without sending a notification or updating cooldown state",
           },
         },
         handler: async ({ rules, "dry-run": dryRun }) =>

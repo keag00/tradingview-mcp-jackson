@@ -3,7 +3,7 @@
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Runs `tv trade-alert check` every 15 minutes via launchd (macOS).
-  This only evaluates and texts you when TradingView Desktop is already
+  This only evaluates and notifies you (Pushover) when TradingView Desktop is already
   running with CDP enabled (see ./scripts/launch_tv_debug_mac.sh) — it does
   not launch TradingView itself.
 
