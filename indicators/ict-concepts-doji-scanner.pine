@@ -32,6 +32,7 @@ showLiveBOS     = input.bool(true, "Show Live BOS (reacts intrabar, unconfirmed)
 grpSess = "Sessions & Daily/Weekly Levels"
 showPDHL      = input.bool(true, "Show Previous Day High/Low", group=grpSess)
 showPWHL      = input.bool(true, "Show Previous Week High/Low", group=grpSess)
+showPMHL      = input.bool(true, "Show Previous Month High/Low", group=grpSess)
 showSessions  = input.bool(true, "Show Session Highs/Lows (Asia/London/NY)", group=grpSess)
 asiaSession   = input.session("1900-0400", "Asia Session (ET)", group=grpSess)
 londonSession = input.session("0300-1200", "London Session (ET)", group=grpSess)
@@ -433,6 +434,166 @@ if showSessions and not na(nyHigh)
         label.set_x(nyLowLbl, bar_index)
         label.set_y(nyHighLbl, nyHigh)
         label.set_y(nyLowLbl, nyLow)
+
+// ============================================================
+// PREVIOUS DAY / WEEK / MONTH HIGH & LOW
+// Non-repainting: request.security with [1] on the daily/weekly/monthly series
+// always reads the last *completed* day/week/month, never the one in progress.
+// ============================================================
+[pdHigh, pdLow] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[pwHigh, pwLow] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[pmHigh, pmLow] = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+
+// pdHigh/pwHigh/pmHigh only change value on the first intraday bar of a new
+// day/week/month (that's when request.security's [1]-lagged series rolls
+// over), so comparing against the previous bar's value doubles as a clean
+// boundary detector for anchoring the line's left edge.
+var int dayStartBar   = na
+var int weekStartBar  = na
+var int monthStartBar = na
+if not na(pdHigh) and (na(pdHigh[1]) or pdHigh != pdHigh[1] or pdLow != pdLow[1])
+    dayStartBar := bar_index
+if not na(pwHigh) and (na(pwHigh[1]) or pwHigh != pwHigh[1] or pwLow != pwLow[1])
+    weekStartBar := bar_index
+if not na(pmHigh) and (na(pmHigh[1]) or pmHigh != pmHigh[1] or pmLow != pmLow[1])
+    monthStartBar := bar_index
+
+var line pdHighLine = na
+var line pdLowLine  = na
+var line pwHighLine = na
+var line pwLowLine  = na
+var line pmHighLine = na
+var line pmLowLine  = na
+var label pdHighLbl = na
+var label pdLowLbl  = na
+var label pwHighLbl = na
+var label pwLowLbl  = na
+var label pmHighLbl = na
+var label pmLowLbl  = na
+
+if showPDHL and not na(pdHigh)
+    if not na(pdHighLine)
+        line.delete(pdHighLine)
+        line.delete(pdLowLine)
+        label.delete(pdHighLbl)
+        label.delete(pdLowLbl)
+    pdHighLine := line.new(dayStartBar, pdHigh, bar_index, pdHigh, color=color.new(color.silver, 20), style=line.style_dashed, width=1)
+    pdLowLine  := line.new(dayStartBar, pdLow,  bar_index, pdLow,  color=color.new(color.silver, 20), style=line.style_dashed, width=1)
+    pdHighLbl  := label.new(bar_index, pdHigh, "PDH", style=label.style_label_left, color=color.new(color.silver, 100), textcolor=color.silver, size=size.tiny)
+    pdLowLbl   := label.new(bar_index, pdLow,  "PDL", style=label.style_label_left, color=color.new(color.silver, 100), textcolor=color.silver, size=size.tiny)
+
+if showPWHL and not na(pwHigh)
+    if not na(pwHighLine)
+        line.delete(pwHighLine)
+        line.delete(pwLowLine)
+        label.delete(pwHighLbl)
+        label.delete(pwLowLbl)
+    pwHighLine := line.new(weekStartBar, pwHigh, bar_index, pwHigh, color=color.new(color.blue, 20), style=line.style_dotted, width=1)
+    pwLowLine  := line.new(weekStartBar, pwLow,  bar_index, pwLow,  color=color.new(color.blue, 20), style=line.style_dotted, width=1)
+    pwHighLbl  := label.new(bar_index, pwHigh, "PWH", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+    pwLowLbl   := label.new(bar_index, pwLow,  "PWL", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+
+if showPMHL and not na(pmHigh)
+    if not na(pmHighLine)
+        line.delete(pmHighLine)
+        line.delete(pmLowLine)
+        label.delete(pmHighLbl)
+        label.delete(pmLowLbl)
+    pmHighLine := line.new(monthStartBar, pmHigh, bar_index, pmHigh, color=color.new(color.fuchsia, 20), style=line.style_solid, width=2)
+    pmLowLine  := line.new(monthStartBar, pmLow,  bar_index, pmLow,  color=color.new(color.fuchsia, 20), style=line.style_solid, width=2)
+    pmHighLbl  := label.new(bar_index, pmHigh, "PMH", style=label.style_label_left, color=color.new(color.fuchsia, 100), textcolor=color.fuchsia, size=size.tiny)
+    pmLowLbl   := label.new(bar_index, pmLow,  "PML", style=label.style_label_left, color=color.new(color.fuchsia, 100), textcolor=color.fuchsia, size=size.tiny)
+
+// ============================================================
+// SESSION HIGHS/LOWS — Asia, London, New York
+// Each session's H/L line is redrawn every bar, extending right to the
+// current bar; the level itself only updates while that session is active,
+// so once a session ends its line freezes and keeps extending forward as a
+// liquidity reference until the next occurrence of that session resets it.
+// ============================================================
+inAsia   = not na(time(timeframe.period, asiaSession, "America/New_York"))
+inLondon = not na(time(timeframe.period, londonSession, "America/New_York"))
+inNY     = not na(time(timeframe.period, nySession, "America/New_York"))
+
+var float asiaHigh = na
+var float asiaLow  = na
+var int   asiaStartBar = na
+var float londonHigh = na
+var float londonLow  = na
+var int   londonStartBar = na
+var float nyHigh = na
+var float nyLow  = na
+var int   nyStartBar = na
+
+if inAsia and not inAsia[1]
+    asiaHigh := high
+    asiaLow := low
+    asiaStartBar := bar_index
+else if inAsia
+    asiaHigh := math.max(asiaHigh, high)
+    asiaLow := math.min(asiaLow, low)
+
+if inLondon and not inLondon[1]
+    londonHigh := high
+    londonLow := low
+    londonStartBar := bar_index
+else if inLondon
+    londonHigh := math.max(londonHigh, high)
+    londonLow := math.min(londonLow, low)
+
+if inNY and not inNY[1]
+    nyHigh := high
+    nyLow := low
+    nyStartBar := bar_index
+else if inNY
+    nyHigh := math.max(nyHigh, high)
+    nyLow := math.min(nyLow, low)
+
+var line asiaHighLine = na
+var line asiaLowLine  = na
+var line londonHighLine = na
+var line londonLowLine  = na
+var line nyHighLine = na
+var line nyLowLine  = na
+var label asiaHighLbl = na
+var label asiaLowLbl  = na
+var label londonHighLbl = na
+var label londonLowLbl  = na
+var label nyHighLbl = na
+var label nyLowLbl  = na
+
+if showSessions and not na(asiaHigh)
+    if not na(asiaHighLine)
+        line.delete(asiaHighLine)
+        line.delete(asiaLowLine)
+        label.delete(asiaHighLbl)
+        label.delete(asiaLowLbl)
+    asiaHighLine := line.new(asiaStartBar, asiaHigh, bar_index, asiaHigh, color=color.new(color.purple, 30), style=line.style_solid, width=1)
+    asiaLowLine  := line.new(asiaStartBar, asiaLow,  bar_index, asiaLow,  color=color.new(color.purple, 30), style=line.style_solid, width=1)
+    asiaHighLbl  := label.new(bar_index, asiaHigh, "ASIA H", style=label.style_label_left, color=color.new(color.purple, 100), textcolor=color.purple, size=size.tiny)
+    asiaLowLbl   := label.new(bar_index, asiaLow,  "ASIA L", style=label.style_label_left, color=color.new(color.purple, 100), textcolor=color.purple, size=size.tiny)
+
+if showSessions and not na(londonHigh)
+    if not na(londonHighLine)
+        line.delete(londonHighLine)
+        line.delete(londonLowLine)
+        label.delete(londonHighLbl)
+        label.delete(londonLowLbl)
+    londonHighLine := line.new(londonStartBar, londonHigh, bar_index, londonHigh, color=color.new(color.blue, 30), style=line.style_solid, width=1)
+    londonLowLine  := line.new(londonStartBar, londonLow,  bar_index, londonLow,  color=color.new(color.blue, 30), style=line.style_solid, width=1)
+    londonHighLbl  := label.new(bar_index, londonHigh, "LDN H", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+    londonLowLbl   := label.new(bar_index, londonLow,  "LDN L", style=label.style_label_left, color=color.new(color.blue, 100), textcolor=color.blue, size=size.tiny)
+
+if showSessions and not na(nyHigh)
+    if not na(nyHighLine)
+        line.delete(nyHighLine)
+        line.delete(nyLowLine)
+        label.delete(nyHighLbl)
+        label.delete(nyLowLbl)
+    nyHighLine := line.new(nyStartBar, nyHigh, bar_index, nyHigh, color=color.new(color.orange, 30), style=line.style_solid, width=1)
+    nyLowLine  := line.new(nyStartBar, nyLow,  bar_index, nyLow,  color=color.new(color.orange, 30), style=line.style_solid, width=1)
+    nyHighLbl  := label.new(bar_index, nyHigh, "NY H", style=label.style_label_left, color=color.new(color.orange, 100), textcolor=color.orange, size=size.tiny)
+    nyLowLbl   := label.new(bar_index, nyLow,  "NY L", style=label.style_label_left, color=color.new(color.orange, 100), textcolor=color.orange, size=size.tiny)
 
 // ============================================================
 // BIAS TABLE
