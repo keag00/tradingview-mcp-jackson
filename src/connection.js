@@ -2,6 +2,7 @@ import CDP from 'chrome-remote-interface';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { loadScannerTab } from './core/scanner_tab_state.js';
 
 let client = null;
 let targetInfo = null;
@@ -87,10 +88,12 @@ async function listPageTargets() {
 async function findChartTarget() {
   const targets = await listPageTargets();
   const pineTabId = readPineTabState()?.targetId;
-  // Never hand the "main" connection the dedicated background Pine tab —
-  // every other tool (chart, data, quotes, morning brief, ...) should keep
-  // talking to the tab the user is actually looking at.
-  const candidates = targets.filter(t => t.type === 'page' && t.id !== pineTabId);
+  const scannerId = loadScannerTab()?.target_id;
+  // Never hand the "main" connection the dedicated background Pine tab or
+  // the dedicated background scanner tab — every other tool (chart, data,
+  // quotes, morning brief, ...) should keep talking to the tab the user is
+  // actually looking at.
+  const candidates = targets.filter(t => t.type === 'page' && t.id !== pineTabId && t.id !== scannerId);
   return candidates.find(t => /tradingview\.com\/chart/i.test(t.url))
     || candidates.find(t => /tradingview/i.test(t.url))
     || null;
@@ -240,6 +243,68 @@ export async function disconnect() {
     client = null;
     targetInfo = null;
   }
+}
+
+/**
+ * A standalone CDP connection pinned to one specific target id, independent
+ * of the default singleton above. Evaluating against it runs JS in that
+ * tab's page context without bringing the tab to the foreground — used to
+ * drive the background scanner tab while the user's active tab stays put.
+ */
+export function createScopedConnection(targetId) {
+  let scopedClient = null;
+
+  async function getScopedClient() {
+    if (scopedClient) {
+      try {
+        await scopedClient.Runtime.evaluate({ expression: '1', returnByValue: true });
+        return scopedClient;
+      } catch {
+        scopedClient = null;
+      }
+    }
+    scopedClient = await CDP({ host: CDP_HOST, port: CDP_PORT, target: targetId });
+    await scopedClient.Runtime.enable();
+    await scopedClient.Page.enable();
+    await scopedClient.DOM.enable();
+    return scopedClient;
+  }
+
+  async function scopedEvaluate(expression, opts = {}) {
+    const c = await getScopedClient();
+    const result = await c.Runtime.evaluate({
+      expression,
+      returnByValue: true,
+      awaitPromise: opts.awaitPromise ?? false,
+      ...opts,
+    });
+    if (result.exceptionDetails) {
+      const msg = result.exceptionDetails.exception?.description
+        || result.exceptionDetails.text
+        || 'Unknown evaluation error';
+      throw new Error(`JS evaluation error: ${msg}`);
+    }
+    return result.result?.value;
+  }
+
+  async function scopedEvaluateAsync(expression) {
+    return scopedEvaluate(expression, { awaitPromise: true });
+  }
+
+  async function scopedDisconnect() {
+    if (scopedClient) {
+      try { await scopedClient.close(); } catch {}
+      scopedClient = null;
+    }
+  }
+
+  return {
+    targetId,
+    getClient: getScopedClient,
+    evaluate: scopedEvaluate,
+    evaluateAsync: scopedEvaluateAsync,
+    disconnect: scopedDisconnect,
+  };
 }
 
 // --- Direct API path helpers ---
