@@ -253,7 +253,7 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
     const moveWord = signal.direction === "bullish" ? "up" : "down";
     const keyLevel = signal.key_level != null ? signal.key_level : "n/a";
     const entryTf = signal.entry_timeframe || rules.default_timeframe;
-    const title = `${signal.symbol} — ${position} (${entryTf}m)`;
+    const title = `${signal.symbol} — ${position} — ${signal.confidence}% (${entryTf}m)`;
     const body =
       `${signal.confidence}% probability it moves ${moveWord}. Entry timeframe: ${entryTf}. Key level: ${keyLevel}. ${signal.reasoning}`.slice(
         0,

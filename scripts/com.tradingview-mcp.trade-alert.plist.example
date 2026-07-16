@@ -2,7 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Runs `tv trade-alert check` every 15 minutes via launchd (macOS).
+  Runs `tv trade-alert check` every 5 minutes via launchd (macOS). Adjust
+  StartInterval (seconds) below if you want a different cadence — a full
+  multi-timeframe scan takes ~70s, so don't go much below that.
   This only evaluates and notifies you (Pushover) when TradingView Desktop is already
   running with CDP enabled (see ./scripts/launch_tv_debug_mac.sh) — it does
   not launch TradingView itself.
@@ -36,7 +38,7 @@
   <string>REPLACE_WITH_PROJECT_DIR</string>
 
   <key>StartInterval</key>
-  <integer>900</integer>
+  <integer>300</integer>
 
   <key>StandardOutPath</key>
   <string>REPLACE_WITH_PROJECT_DIR/trade-alert.log</string>
