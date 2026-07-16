@@ -25,7 +25,7 @@ const server = new McpServer(
       "AI-assisted TradingView chart analysis and Pine Script development via Chrome DevTools Protocol",
   },
   {
-    instructions: `TradingView MCP — 79 tools for reading and controlling a live TradingView Desktop chart.
+    instructions: `TradingView MCP — 80 tools for reading and controlling a live TradingView Desktop chart.
 
 TOOL SELECTION GUIDE — use this to pick the right tool:
 
@@ -35,6 +35,7 @@ Reading your chart:
 - quote_get → get real-time price snapshot (last, OHLC, volume)
 - data_get_ohlcv → get price bars. ALWAYS pass summary=true unless you need individual bars
 - data_get_trend_summary → trend direction/strength/structure computed from price data alone (EMA slope + ADX/DMI + HH/HL swing structure) — no indicators needed on chart
+- data_get_multi_timeframe_trend → checks trend alignment across several timeframes (default 15m/1H/4H/D) for a symbol, switching the chart through each and restoring it after
 
 Reading custom Pine indicator output (line.new/label.new/table.new/box.new drawings):
 - data_get_pine_lines → horizontal price levels from custom indicators (deduplicated, sorted)

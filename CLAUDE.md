@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A local MCP server + CLI (`tv`) that bridges Claude Code to a live TradingView Desktop app via the Chrome DevTools Protocol (CDP, port 9222). 82 MCP tools for reading chart state, developing Pine Script, driving chart UI, and running a rules-based "morning brief" over a watchlist. No data leaves the machine; no TradingView servers are contacted directly — everything goes through the already-authenticated Desktop app.
+A local MCP server + CLI (`tv`) that bridges Claude Code to a live TradingView Desktop app via the Chrome DevTools Protocol (CDP, port 9222). 83 MCP tools for reading chart state, developing Pine Script, driving chart UI, and running a rules-based "morning brief" over a watchlist. No data leaves the machine; no TradingView servers are contacted directly — everything goes through the already-authenticated Desktop app.
 
 ## Development
 
@@ -71,7 +71,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 
 ### "What's the trend?" / "Is this trending or chopping?"
 - `data_get_trend_summary` → direction (EMA20/50 slope), strength (ADX/DMI — below 20 means no real trend), and swing structure (HH/HL vs LH/LL), computed straight from price bars — works even with no indicators on the chart. Included automatically per symbol in `morning_brief`.
-- This is single-timeframe/single-symbol. For trend agreement across multiple timeframes, currently pull the same tool after `chart_set_timeframe` on each interval — no dedicated multi-timeframe alignment tool yet.
+- `data_get_multi_timeframe_trend` → runs the same read across several timeframes (default 15m/1H/4H/D) for a symbol and reports whether they agree ("fully aligned bullish", "conflicting", etc). Switches the live chart through each timeframe and restores the original symbol/timeframe when done — use this to confirm conviction before entering, not for quick single-shot checks.
 
 ### "Analyze my chart" (full report workflow)
 1. `quote_get` → current price

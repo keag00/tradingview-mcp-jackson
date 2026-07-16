@@ -200,3 +200,87 @@ export async function getTrendSummary({ count } = {}) {
 function round(v) {
   return v === null || v === undefined ? null : Math.round(v * 10000) / 10000;
 }
+
+const DEFAULT_TIMEFRAMES = ["15", "60", "240", "D"];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Runs getTrendSummary() across several timeframes for a symbol and checks
+// whether they agree on direction. Switches the live chart's timeframe (and
+// optionally symbol) per iteration, then restores the original chart state.
+export async function getMultiTimeframeTrend({ symbol, timeframes, count } = {}) {
+  const tfs = timeframes && timeframes.length ? timeframes : DEFAULT_TIMEFRAMES;
+
+  let originalSymbol, originalTimeframe;
+  try {
+    const currentState = await chart.getState();
+    originalSymbol = currentState.symbol;
+    originalTimeframe = currentState.resolution;
+  } catch (_) {}
+
+  if (symbol) {
+    try {
+      await chart.setSymbol({ symbol });
+      await sleep(900);
+    } catch (err) {
+      throw new Error(`Could not set symbol '${symbol}': ${err.message}`);
+    }
+  }
+
+  const perTimeframe = [];
+  for (const tf of tfs) {
+    try {
+      await chart.setTimeframe({ timeframe: tf });
+      await sleep(900);
+      const summary = await getTrendSummary({ count });
+      perTimeframe.push({ timeframe: tf, ...summary });
+    } catch (err) {
+      perTimeframe.push({ timeframe: tf, success: false, error: err.message });
+    }
+  }
+
+  // Restore original chart state
+  try {
+    if (symbol && originalSymbol) await chart.setSymbol({ symbol: originalSymbol });
+    if (originalTimeframe) await chart.setTimeframe({ timeframe: originalTimeframe });
+  } catch (_) {}
+
+  const valid = perTimeframe.filter((r) => r.success !== false);
+  const upCount = valid.filter((r) => r.direction === "up").length;
+  const downCount = valid.filter((r) => r.direction === "down").length;
+  const strongCount = valid.filter((r) => r.strength === "strong" || r.strength === "very strong").length;
+  const chopCount = valid.filter((r) => r.strength === "weak/choppy").length;
+
+  let alignment = "insufficient_data";
+  let verdict = "not enough valid timeframe reads to judge alignment";
+  if (valid.length) {
+    if (upCount === valid.length) {
+      alignment = "fully aligned bullish";
+    } else if (downCount === valid.length) {
+      alignment = "fully aligned bearish";
+    } else if (upCount > downCount && upCount >= Math.ceil(valid.length * 0.66)) {
+      alignment = "mostly aligned bullish";
+    } else if (downCount > upCount && downCount >= Math.ceil(valid.length * 0.66)) {
+      alignment = "mostly aligned bearish";
+    } else {
+      alignment = "conflicting";
+    }
+
+    const strongNote = strongCount === valid.length
+      ? "all timeframes trending with strong+ ADX"
+      : `${strongCount}/${valid.length} timeframes have strong+ ADX`;
+    verdict = `${alignment} (${upCount} up / ${downCount} down / ${chopCount} choppy across ${valid.length} timeframes) — ${strongNote}`;
+  }
+
+  return {
+    success: true,
+    symbol: valid[0]?.symbol || symbol || originalSymbol || null,
+    timeframes_checked: tfs,
+    per_timeframe: perTimeframe,
+    alignment,
+    bullish_count: upCount,
+    bearish_count: downCount,
+    choppy_count: chopCount,
+    strong_count: strongCount,
+    verdict,
+  };
+}
