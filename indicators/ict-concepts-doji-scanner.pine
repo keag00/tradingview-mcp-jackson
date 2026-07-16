@@ -37,6 +37,30 @@ asiaSession   = input.session("1900-0400", "Asia Session (ET)", group=grpSess)
 londonSession = input.session("0300-1200", "London Session (ET)", group=grpSess)
 nySession     = input.session("0800-1700", "New York Session (ET)", group=grpSess)
 
+grpTrend = "Trend Filter (ADX) & VWAP"
+showADX       = input.bool(true, "Show ADX Reading in Bias Table", group=grpTrend)
+adxLen        = input.int(14, "ADX DI Length", minval=1, group=grpTrend)
+adxSmoothing  = input.int(14, "ADX Smoothing", minval=1, group=grpTrend)
+adxThreshold  = input.float(20.0, "ADX Trending Threshold", minval=1, maxval=100, group=grpTrend)
+gateWithADX   = input.bool(true, "Require ADX >= threshold to confirm BOS / Order Blocks", group=grpTrend)
+showVWAP      = input.bool(true, "Show Session VWAP", group=grpTrend)
+
+// ============================================================
+// TREND FILTER (ADX) & VWAP
+// ADX is used as a trend-strength confirmation, not a plotted overlay line —
+// its 0-100 scale would be meaningless squashed onto a GBPUSD price pane
+// (overlay=true puts every plot() on the main chart, there's no separate-pane
+// output from a single overlay script). Instead adxTrending gates BOS / Order
+// Block confirmation below (when gateWithADX is on) and its numeric reading
+// surfaces in the bias table. VWAP, by contrast, lives on the price scale
+// natively, so it's plotted directly like the other session/level overlays.
+// ============================================================
+[diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxSmoothing)
+adxTrending = adxValue >= adxThreshold
+
+vwapValue = ta.vwap(hlc3)
+plot(showVWAP ? vwapValue : na, title="VWAP", color=color.new(color.fuchsia, 0), style=plot.style_line, linewidth=2)
+
 // ============================================================
 // STRUCTURE: swing pivots, bias, BOS, liquidity sweeps
 // ============================================================
@@ -99,8 +123,9 @@ var int lastBearBosBar = na
 
 crossedAboveHigh = ta.crossover(close, lastSwingHigh)
 crossedBelowLow  = ta.crossunder(close, lastSwingLow)
-bullBOS = showBOS and not na(lastSwingHigh) and crossedAboveHigh and bar_index != lastBullBosBar
-bearBOS = showBOS and not na(lastSwingLow) and crossedBelowLow and bar_index != lastBearBosBar
+adxOk = not gateWithADX or adxTrending
+bullBOS = showBOS and not na(lastSwingHigh) and crossedAboveHigh and bar_index != lastBullBosBar and adxOk
+bearBOS = showBOS and not na(lastSwingLow) and crossedBelowLow and bar_index != lastBearBosBar and adxOk
 
 if bullBOS
     lastBullBosBar := bar_index
@@ -394,9 +419,13 @@ if showSessions and not na(nyHigh)
 // BIAS TABLE
 // ============================================================
 if showBias and barstate.islast
-    var table biasTable = table.new(position.top_right, 1, 1, border_width=1)
+    var table biasTable = table.new(position.top_right, 1, showADX ? 2 : 1, border_width=1)
     biasColor = bias == "Uptrend" ? color.new(color.lime, 70) : bias == "Downtrend" ? color.new(color.red, 70) : color.new(color.gray, 70)
     table.cell(biasTable, 0, 0, "BIAS: " + bias, text_color=color.white, bgcolor=biasColor)
+    if showADX
+        adxColor = adxTrending ? color.new(color.lime, 70) : color.new(color.gray, 70)
+        adxText = "ADX: " + str.tostring(adxValue, "#.#") + (adxTrending ? " (Trending)" : " (Choppy)")
+        table.cell(biasTable, 0, 1, adxText, text_color=color.white, bgcolor=adxColor)
 
 // ============================================================
 // DOJI PATTERN DETECTION
