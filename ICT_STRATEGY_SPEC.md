@@ -59,6 +59,15 @@ Only the exact 8 color/shape combos above are marked (e.g. red dragonfly and gre
 - Fixed a latent repaint bug: confirmed-BOS and FVG object creation (`line.new`/`box.new`) used live `close`/`high`/`low` inside a one-shot condition with no per-bar guard, so a price chopping back and forth around the level within a single unconfirmed bar could fire the condition on more than one tick and stack duplicate lines/boxes for what should be a single event. Added `bar_index`-based one-shot guards (`lastBullBosBar`/`lastBearBosBar`/`lastBullFvgBar`/`lastBearFvgBar`) — reacts on the first tick the condition trips, never duplicates. Order Block creation is nested under BOS so it inherited the fix for free.
 - Added a genuinely lag-free live swing high/low (rolling `ta.highest`/`ta.lowest`) and a "live BOS" marker built on it, since the confirmed pivots are structurally lagged by `swingLen` bars — see the table above.
 
+## Performance fix (2026-07-15)
+
+- Found and fixed a real drawing-object churn bug: the Equilibrium/premium-discount line+boxes, PDH/PDL/PWH/PWL lines+labels, and the Asia/London/NY session H/L lines+labels were all being `line.delete()`/`box.delete()`'d and rebuilt from scratch on **every single bar** (not just when their values actually changed) — across the whole chart history on load and on every realtime tick. That's the classic Pine anti-pattern the docs warn against; it's very likely what "not running smoothly" was pointing at (flicker/lag on lower timeframes, extra load on every tick).
+- Rewired all three to the idiomatic pattern: create the line/box/label objects once (`var ... = na`, create only when `na`), then move them in place on every other bar with `line.set_xy1`/`set_xy2`, `box.set_lefttop`/`set_rightbottom`, `label.set_x`/`set_y` instead of deleting and recreating. PDH/PWH and the session levels now only actually delete+recreate on the bar a new day/week/session instance begins (a handful of times a day) instead of every bar.
+- Also dropped the redundant `var bool obFound*` flags in the Order Block search loops in favor of an early `break` once the nearest opposite-colour candle is found, instead of always scanning the full `obLookback` range.
+- Visual behavior is unchanged — same lines, same values, same freeze-on-mitigation semantics — this is purely an internal efficiency fix. Verified via `tv pine analyze` (0 issues) and `tv pine check` (compiled successfully, 0 errors/0 warnings). Live in-app push (`tv pine set`) hit the known Monaco-fiber-tree fragility noted above and couldn't be used to visually re-confirm on this pass — worth a manual re-check in the TradingView Pine Editor next session.
+
 ## Next steps (add to as the project grows)
 
 - (add new requirements here as they come up)
+- Re-confirm the performance fix visually in the live Pine Editor once the `pine_push`/`pine_pull` Monaco-fiber fragility isn't blocking (see caveat above)
+- Alerts still not wired up for BOS/FVG/sweep/OB conditions (carried over from "Known caveats")
