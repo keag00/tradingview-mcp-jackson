@@ -16,7 +16,7 @@ Architecture decision: everything is detected and drawn **natively in Pine Scrip
 
 | Concept | Status | Logic |
 |---|---|---|
-| Trend bias (uptrend/downtrend/range) | ✅ v1 | Compares last two confirmed swing highs/lows (HH/HL = uptrend, LH/LL = downtrend), shown in a top-right table |
+| Trend bias (uptrend/downtrend/range) | ✅ v1, live override v4 (2026-07-15) | Compares last two confirmed swing highs/lows (HH/HL = uptrend, LH/LL = downtrend); a live/unconfirmed BOS (`liveBullBOS`/`liveBearBOS`) now overrides it immediately instead of waiting up to `swingLen` bars for the next confirmed pair, tagged "(live)" in the top-right table until structure confirms it |
 | Break of Structure (BOS) | ✅ v1 | `close` crosses the last confirmed swing high/low |
 | Liquidity sweep | ✅ v1 | Wick trades beyond a swing high/low but closes back inside it; only flags once per level |
 | Fair Value Gap (FVG) | ✅ v1 | Classic 3-candle imbalance (`low > high[2]` / `high < low[2]`); box extends right only while unmitigated, freezes once price trades back through it |
