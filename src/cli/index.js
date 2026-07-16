@@ -32,6 +32,7 @@ import "./commands/morning.js";
 import "./commands/trade_alert.js";
 import "./commands/trend.js";
 import "./commands/journal.js";
+import "./commands/session_init.js";
 
 // Run
 import { run } from "./router.js";

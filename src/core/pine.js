@@ -625,3 +625,41 @@ export async function listScripts() {
     error: scripts?.error,
   };
 }
+
+/**
+ * Fetches a saved script's source straight from the pine-facade REST API,
+ * without opening the Pine Editor panel or touching Monaco — read-only, so
+ * it's safe to call just to check for drift against a local copy.
+ */
+export async function getSavedSource({ name }) {
+  const escapedName = JSON.stringify(name.toLowerCase());
+  const result = await evaluateAsync(`
+    (function() {
+      var target = ${escapedName};
+      return fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', { credentials: 'include' })
+        .then(function(r) { return r.json(); })
+        .then(function(scripts) {
+          if (!Array.isArray(scripts)) return {error: 'pine-facade returned unexpected data'};
+          var match = null;
+          for (var i = 0; i < scripts.length; i++) {
+            var sn = (scripts[i].scriptName || '').toLowerCase();
+            var st = (scripts[i].scriptTitle || '').toLowerCase();
+            if (sn === target || st === target) { match = scripts[i]; break; }
+          }
+          if (!match) return {found: false};
+          var id = match.scriptIdPart;
+          var ver = match.version || 1;
+          return fetch('https://pine-facade.tradingview.com/pine-facade/get/' + id + '/' + ver, { credentials: 'include' })
+            .then(function(r2) { return r2.json(); })
+            .then(function(data) {
+              return { found: true, name: match.scriptName || match.scriptTitle, id: id, source: data.source || '' };
+            });
+        })
+        .catch(function(e) { return {error: e.message}; });
+    })()
+  `);
+
+  if (result?.error) throw new Error(result.error);
+  if (!result?.found) return { success: true, found: false, name };
+  return { success: true, found: true, name: result.name, script_id: result.id, source: result.source };
+}

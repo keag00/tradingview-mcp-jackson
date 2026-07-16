@@ -17,6 +17,7 @@ import { registerTabTools } from "./tools/tab.js";
 import { registerMorningTools } from "./tools/morning.js";
 import { registerTrendTools } from "./tools/trend.js";
 import { registerJournalTools } from "./tools/journal.js";
+import { registerSessionInitTools } from "./tools/session_init.js";
 
 const server = new McpServer(
   {
@@ -93,6 +94,7 @@ registerTabTools(server);
 registerMorningTools(server);
 registerTrendTools(server);
 registerJournalTools(server);
+registerSessionInitTools(server);
 
 // Startup notice (stderr so it doesn't interfere with MCP stdio protocol)
 process.stderr.write(

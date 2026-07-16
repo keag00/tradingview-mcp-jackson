@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A local MCP server + CLI (`tv`) that bridges Claude Code to a live TradingView Desktop app via the Chrome DevTools Protocol (CDP, port 9222). 83 MCP tools for reading chart state, developing Pine Script, driving chart UI, and running a rules-based "morning brief" over a watchlist. No data leaves the machine; no TradingView servers are contacted directly — everything goes through the already-authenticated Desktop app.
+A local MCP server + CLI (`tv`) that bridges Claude Code to a live TradingView Desktop app via the Chrome DevTools Protocol (CDP, port 9222). 87 MCP tools for reading chart state, developing Pine Script, driving chart UI, and running a rules-based "morning brief" over a watchlist. No data leaves the machine; no TradingView servers are contacted directly — everything goes through the already-authenticated Desktop app.
+
+### Start every TradingView session with `session_ensure_indicators` / `tv session-init`
+
+Before doing any chart/indicator/data work in a session, run `session_ensure_indicators` (MCP) or `tv session-init` (CLI) first (`src/core/session_init.js`). It checks the CDP connection, re-asserts the expected symbol from `rules.json`'s `watchlist[0]` (TradingView Desktop has a known bug where the symbol silently reverts across a relaunch), adds the ICT Concepts + Doji Scanner indicator to the chart if it isn't already there, and compares the cloud-saved script against `indicators/ict-concepts-doji-scanner.pine`, pushing the repo version if they've drifted. Pass `dry_run: true` to see what it would do without changing anything. This exists so the indicator doesn't have to be manually re-added/re-synced by hand at the start of every session.
 
 ## Development
 
@@ -63,8 +67,12 @@ Each alert also attaches a chart screenshot, captured via `capture.captureScreen
 
 - `pine_push.js` / `pine_pull.js` locate the Pine Editor's Monaco instance by walking React-fiber internals off `.monaco-editor.pine-editor-monaco` DOM nodes. TradingView can leave more than one such element in the DOM (a stale hidden instance ahead of the live one) — the code must scan all matches for the one whose fiber actually exposes a `monacoEnv`, not just take the first `querySelector` hit, or injection silently fails with "Could not inject into Pine editor".
 - Symbol resolution (`chart_set_symbol` / `tv symbol --set`) goes through TradingView's own search and can resolve a bare ticker to an unexpected instrument — e.g. `GBPUSD` resolving to a CME futures contract instead of spot forex, depending on the account's linked broker. Prefer exchange-qualified symbols (`OANDA:GBPUSD`, not `GBPUSD`/`FX:GBPUSD`) and verify the result with `chart_get_state` / `tv state` (check the exchange, not just the ticker) after setting.
+- TradingView Desktop exposes a single CDP endpoint (port 9222) shared by every Claude Code session on the machine. Two sessions driving it at the same time can collide — one session's chart/symbol/timeframe change is invisible state to the other, and re-running `npm link` from either session's checkout repoints the same global `tv` binary. If a normally-fast CDP call (e.g. `tv state`) hangs or a chart state looks unexpectedly different from what you last set, check for another active session/worktree (`git worktree list` — a locked entry is a strong signal) before assuming something is broken, and avoid actions that would disrupt a chart another session might be mid-use of.
 
 ## Tool Selection — Decision Tree
+
+### "Starting a session" / "get set up"
+- `session_ensure_indicators` (or `tv session-init`) → checks CDP connection, re-asserts the expected symbol, adds the ICT Concepts + Doji Scanner indicator if missing, and pushes the repo's Pine source if the cloud-saved script has drifted. Run this first, before other chart work.
 
 ### "What's on my chart right now?"
 1. `chart_get_state` → symbol, timeframe, chart type, list of all indicators with entity IDs
