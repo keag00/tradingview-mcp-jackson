@@ -14,6 +14,8 @@ import * as morning from "./morning.js";
 import * as capture from "./capture.js";
 import * as chart from "./chart.js";
 import * as data from "./data.js";
+import * as tab from "./tab.js";
+import { createScopedConnection } from "../connection.js";
 
 const STATE_DIR = join(homedir(), ".tradingview-mcp");
 const STATE_PATH = join(STATE_DIR, "alert_state.json");
@@ -61,39 +63,59 @@ const SIGNAL_SCHEMA = {
 };
 
 /**
+ * Resolves which CDP connection to scan with. If a background scanner tab
+ * is pinned (`tv trade-alert set-scanner-tab <index>`) and still open, scans
+ * happen there via a connection scoped to that one tab — its chart flips
+ * through every symbol/timeframe without ever coming to the foreground, so
+ * the user's active tab never flickers. Otherwise falls back to the legacy
+ * behavior of scanning directly on the foreground tab.
+ */
+async function resolveScanConnection() {
+  const status = await tab.getScannerTab().catch(() => ({ configured: false }));
+  if (status.configured && status.active) {
+    return { conn: createScopedConnection(status.tab_id), scannerTab: status };
+  }
+  return { conn: null, scannerTab: status };
+}
+
+/**
  * Scans each watchlist symbol across every timeframe in rules.scan_timeframes
  * (falling back to just default_timeframe if unset), so the model can reason
  * about higher-timeframe bias/structure vs. lower-timeframe entry triggers —
  * standard ICT multi-timeframe confluence — instead of a single snapshot.
  */
-async function scanMultiTimeframe({ rules }) {
+async function scanMultiTimeframe({ rules, conn }) {
   const { watchlist = [], default_timeframe = "240", scan_timeframes } = rules;
   const timeframes =
     scan_timeframes && scan_timeframes.length
       ? scan_timeframes
       : [default_timeframe];
 
+  // Only save/restore the original symbol when scanning the foreground tab —
+  // a dedicated scanner tab is never viewed, so there's nothing to restore.
   let originalSymbol, originalTimeframe;
-  try {
-    const currentState = await chart.getState();
-    originalSymbol = currentState.symbol;
-    originalTimeframe = currentState.resolution;
-  } catch (_) {}
+  if (!conn) {
+    try {
+      const currentState = await chart.getState();
+      originalSymbol = currentState.symbol;
+      originalTimeframe = currentState.resolution;
+    } catch (_) {}
+  }
 
   const results = [];
   for (const symbol of watchlist) {
     const perTimeframe = [];
     for (const timeframe of timeframes) {
       try {
-        await chart.setSymbol({ symbol });
+        await chart.setSymbol({ symbol, conn });
         await new Promise((r) => setTimeout(r, 900));
-        await chart.setTimeframe({ timeframe });
+        await chart.setTimeframe({ timeframe, conn });
         await new Promise((r) => setTimeout(r, 900));
 
         const [state, indicators, quote] = await Promise.all([
-          chart.getState(),
-          data.getStudyValues(),
-          data.getQuote({}),
+          chart.getState({ conn }),
+          data.getStudyValues({ conn }),
+          data.getQuote({ conn }),
         ]);
 
         perTimeframe.push({ timeframe, state, indicators, quote });
@@ -104,7 +126,7 @@ async function scanMultiTimeframe({ rules }) {
     results.push({ symbol, timeframes: perTimeframe });
   }
 
-  if (originalSymbol) {
+  if (!conn && originalSymbol) {
     try {
       await chart.setSymbol({ symbol: originalSymbol });
       if (originalTimeframe)
@@ -212,7 +234,8 @@ async function sendPushover({ title, message, imagePath }) {
 
 export async function checkForSignals({ rules_path, dry_run = false } = {}) {
   const { rules } = morning.loadRules(rules_path);
-  const scanned = await scanMultiTimeframe({ rules });
+  const { conn, scannerTab } = await resolveScanConnection();
+  const scanned = await scanMultiTimeframe({ rules, conn });
   const symbolsScanned = scanned
     .map((s) => ({
       symbol: s.symbol,
@@ -220,11 +243,22 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
     }))
     .filter((s) => s.timeframes.length > 0);
 
+  const scannerTabInfo = conn
+    ? { used: true, tab_id: scannerTab.tab_id }
+    : {
+        used: false,
+        note: scannerTab.configured
+          ? "Configured scanner tab is no longer open — scanned on the active tab instead. Run \"tv trade-alert set-scanner-tab <index>\" to fix."
+          : "No scanner tab configured — scanned on the active tab, which will flicker. Run \"tv tab new\" then \"tv trade-alert set-scanner-tab <index>\" to scan in the background instead.",
+      };
+
   if (!symbolsScanned.length) {
+    if (conn) await conn.disconnect();
     return {
       success: true,
       checked_at: new Date().toISOString(),
       dry_run,
+      scanner_tab: scannerTabInfo,
       signals: [],
       texts_sent: [],
       note: "No symbols scanned successfully — nothing to evaluate.",
@@ -267,14 +301,15 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
       try {
         // Re-point the chart to the exact symbol+timeframe the signal fired
         // on, so the attached photo matches what triggered the alert.
-        await chart.setSymbol({ symbol: signal.symbol });
+        await chart.setSymbol({ symbol: signal.symbol, conn });
         await new Promise((r) => setTimeout(r, 900));
-        await chart.setTimeframe({ timeframe: entryTf });
+        await chart.setTimeframe({ timeframe: entryTf, conn });
         await new Promise((r) => setTimeout(r, 900));
 
         const shot = await capture.captureScreenshot({
           region: "chart",
           filename: `alert_${signal.symbol}_${now}`,
+          conn,
         });
         if (shot.success && shot.file_path) imagePath = shot.file_path;
       } catch (err) {
@@ -300,12 +335,14 @@ export async function checkForSignals({ rules_path, dry_run = false } = {}) {
   }
 
   if (!dry_run && textsSent.length) saveAlertState(state);
+  if (conn) await conn.disconnect();
 
   return {
     success: true,
     checked_at: new Date().toISOString(),
     dry_run,
     threshold,
+    scanner_tab: scannerTabInfo,
     signals,
     texts_sent: textsSent,
   };
