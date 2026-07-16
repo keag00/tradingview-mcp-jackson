@@ -1,0 +1,421 @@
+//@version=6
+strategy("ICT Confluence Sniper [Keagan]", shorttitle="ICT Sniper", overlay=true,
+     initial_capital=10000, currency=currency.USD, default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.percent, commission_value=0.02, slippage=2,
+     pyramiding=0, calc_on_every_tick=false,
+     max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ============================================================
+// This is a RULES-BASED CONFLUENCE FILTER, not a guaranteed-winner system.
+// It only fires when multiple independent ICT/SMC signals stack in the same
+// direction (trend bias + liquidity sweep + BOS + discount/premium + FVG/OB
+// + reversal doji), inside session hours, away from news. Use the Strategy
+// Tester tab (List of Trades / Performance Summary) for REAL win-rate and
+// profit-factor numbers on this symbol/timeframe/date-range — do not assume
+// any fixed win rate without running it.
+// ============================================================
+
+// ============================================================
+// INPUTS
+// ============================================================
+grpStruct = "Structure"
+swingLen   = input.int(5, "Swing Lookback (bars each side)", minval=1, group=grpStruct)
+obLookback = input.int(20, "Order Block Search Lookback (bars)", minval=1, maxval=50, group=grpStruct)
+
+grpConf = "Confluence"
+sweepLookback = input.int(10, "Liquidity Sweep Recency (bars)", minval=1, group=grpConf)
+bosLookback   = input.int(10, "BOS Recency (bars)", minval=1, group=grpConf)
+dojiLookback  = input.int(6, "Reversal Doji Recency (bars)", minval=1, group=grpConf)
+minScore      = input.int(5, "Minimum Confluence Score to Enter (of 6)", minval=1, maxval=6, group=grpConf)
+
+grpDoji = "Doji Detection"
+dojiBodyMaxPct       = input.float(10.0, "Doji Max Body (% of range)", minval=0.1, maxval=50, group=grpDoji) / 100
+oppWickMaxPct        = input.float(10.0, "Dragonfly/Gravestone Max Opposite Wick (%)", minval=0, maxval=40, group=grpDoji) / 100
+longLeggedWickMinPct = input.float(35.0, "Long-Legged Min Wick Each Side (%)", minval=10, maxval=49, group=grpDoji) / 100
+crossSymTolPct       = input.float(15.0, "Cross Doji Wick Symmetry Tolerance (%)", minval=1, maxval=40, group=grpDoji) / 100
+
+grpRisk = "Risk Management"
+riskPctPerTrade   = input.float(1.0, "Risk % of Equity per Trade", minval=0.1, maxval=10, group=grpRisk)
+rrMultiple        = input.float(2.0, "Reward:Risk Multiple (TP)", minval=1.0, maxval=10, group=grpRisk)
+atrLen            = input.int(14, "ATR Length (stop buffer)", minval=1, group=grpRisk)
+atrBufferMult     = input.float(0.25, "Stop Buffer (x ATR beyond swept level)", minval=0, maxval=3, group=grpRisk)
+maxLossStreakDay  = input.int(2, "Halt New Entries After N Losses (same day)", minval=1, maxval=10, group=grpRisk)
+
+grpSess = "Session Filter"
+useSessionFilter = input.bool(true, "Only Trade London/NY Kill Zones", group=grpSess)
+londonSession     = input.session("0300-1200", "London Session (ET)", group=grpSess)
+nySession         = input.session("0800-1700", "New York Session (ET)", group=grpSess)
+killzoneBufferMin = input.int(15, "Skip First N Minutes of Session Open", minval=0, maxval=120, group=grpSess)
+
+grpMacro = "News Filter (manual)"
+useMacroFilter = input.bool(true, "Block Entries Around High-Impact News", group=grpMacro)
+event1Time  = input.time(timestamp("2026-07-14 08:30 -0400"), "Event 1 Time (ET)", group=grpMacro)
+event1Label = input.string("CPI Release", "Event 1 Label", group=grpMacro)
+event2Time  = input.time(timestamp("2026-07-17 10:00 -0400"), "Event 2 Time (ET)", group=grpMacro)
+event2Label = input.string("Consumer Sentiment", "Event 2 Label", group=grpMacro)
+blackoutMins = input.int(15, "No-Trade Window Around Event (minutes)", minval=0, maxval=180, group=grpMacro)
+
+// ============================================================
+// STRUCTURE: confirmed swing pivots, bias, BOS, liquidity sweeps
+// (confirmed-only — no live/repainting layer — so backtest fills are real)
+// ============================================================
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+
+var float lastSwingHigh = na
+var float prevSwingHigh = na
+var int   lastSwingHighBar = na
+var float lastSwingLow = na
+var float prevSwingLow = na
+var int   lastSwingLowBar = na
+
+if not na(ph)
+    prevSwingHigh := lastSwingHigh
+    lastSwingHigh := ph
+    lastSwingHighBar := bar_index - swingLen
+if not na(pl)
+    prevSwingLow := lastSwingLow
+    lastSwingLow := pl
+    lastSwingLowBar := bar_index - swingLen
+
+var string bias = "Range"
+if not na(lastSwingHigh) and not na(prevSwingHigh) and not na(lastSwingLow) and not na(prevSwingLow)
+    if lastSwingHigh > prevSwingHigh and lastSwingLow > prevSwingLow
+        bias := "Uptrend"
+    else if lastSwingHigh < prevSwingHigh and lastSwingLow < prevSwingLow
+        bias := "Downtrend"
+    else
+        bias := "Range"
+
+var int lastBullBosBar = na
+var int lastBearBosBar = na
+crossedAboveHigh = ta.crossover(close, lastSwingHigh)
+crossedBelowLow  = ta.crossunder(close, lastSwingLow)
+bullBOS = not na(lastSwingHigh) and crossedAboveHigh and bar_index != lastBullBosBar
+bearBOS = not na(lastSwingLow) and crossedBelowLow and bar_index != lastBearBosBar
+
+if bullBOS
+    lastBullBosBar := bar_index
+    line.new(lastSwingHighBar, lastSwingHigh, bar_index, lastSwingHigh, color=color.new(color.lime, 0), width=1)
+    label.new(bar_index, lastSwingHigh, "BOS", style=label.style_label_down, color=color.new(color.lime, 80), textcolor=color.lime, size=size.tiny)
+if bearBOS
+    lastBearBosBar := bar_index
+    line.new(lastSwingLowBar, lastSwingLow, bar_index, lastSwingLow, color=color.new(color.red, 0), width=1)
+    label.new(bar_index, lastSwingLow, "BOS", style=label.style_label_up, color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
+
+var float lastSweptHigh = na
+var float lastSweptLow = na
+sweepHigh = not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh and lastSwingHigh != lastSweptHigh
+sweepLow  = not na(lastSwingLow) and low < lastSwingLow and close > lastSwingLow and lastSwingLow != lastSweptLow
+
+var float sweptLowLevel  = na
+var float sweptHighLevel = na
+if sweepHigh
+    lastSweptHigh := lastSwingHigh
+    sweptHighLevel := lastSwingHigh
+    label.new(bar_index, high, "SWEEP", style=label.style_label_down, color=color.new(color.orange, 70), textcolor=color.orange, size=size.tiny)
+if sweepLow
+    lastSweptLow := lastSwingLow
+    sweptLowLevel := lastSwingLow
+    label.new(bar_index, low, "SWEEP", style=label.style_label_up, color=color.new(color.orange, 70), textcolor=color.orange, size=size.tiny)
+
+// ============================================================
+// FAIR VALUE GAPS
+// ============================================================
+var box[]   bullFvgBox = array.new_box()
+var float[] bullFvgTop = array.new_float()
+var float[] bullFvgBot = array.new_float()
+var box[]   bearFvgBox = array.new_box()
+var float[] bearFvgTop = array.new_float()
+var float[] bearFvgBot = array.new_float()
+var int lastBullFvgBar = na
+var int lastBearFvgBar = na
+
+bullishFVG = low > high[2] and bar_index != lastBullFvgBar
+bearishFVG = high < low[2] and bar_index != lastBearFvgBar
+
+if bullishFVG
+    lastBullFvgBar := bar_index
+    b = box.new(bar_index[2], low, bar_index, high[2], border_color=color.new(color.lime, 60), bgcolor=color.new(color.lime, 88))
+    label.new(bar_index[1], (low + high[2]) / 2, "FVG", style=label.style_label_left, color=color.new(color.lime, 100), textcolor=color.lime, size=size.tiny)
+    array.push(bullFvgBox, b)
+    array.push(bullFvgTop, low)
+    array.push(bullFvgBot, high[2])
+if bearishFVG
+    lastBearFvgBar := bar_index
+    b = box.new(bar_index[2], low[2], bar_index, high, border_color=color.new(color.red, 60), bgcolor=color.new(color.red, 88))
+    label.new(bar_index[1], (low[2] + high) / 2, "FVG", style=label.style_label_left, color=color.new(color.red, 100), textcolor=color.red, size=size.tiny)
+    array.push(bearFvgBox, b)
+    array.push(bearFvgTop, low[2])
+    array.push(bearFvgBot, high)
+
+priceInBullFvg = false
+if array.size(bullFvgBox) > 0
+    for j = array.size(bullFvgBox) - 1 to 0
+        bx = array.get(bullFvgBox, j)
+        top = array.get(bullFvgTop, j)
+        bot = array.get(bullFvgBot, j)
+        box.set_right(bx, bar_index)
+        if low <= bot
+            array.remove(bullFvgBox, j)
+            array.remove(bullFvgTop, j)
+            array.remove(bullFvgBot, j)
+        else if close >= bot and close <= top
+            priceInBullFvg := true
+
+priceInBearFvg = false
+if array.size(bearFvgBox) > 0
+    for j = array.size(bearFvgBox) - 1 to 0
+        bx = array.get(bearFvgBox, j)
+        top = array.get(bearFvgTop, j)
+        bot = array.get(bearFvgBot, j)
+        box.set_right(bx, bar_index)
+        if high >= top
+            array.remove(bearFvgBox, j)
+            array.remove(bearFvgTop, j)
+            array.remove(bearFvgBot, j)
+        else if close >= bot and close <= top
+            priceInBearFvg := true
+
+// ============================================================
+// ORDER BLOCKS
+// ============================================================
+var box[]   bullObBox = array.new_box()
+var float[] bullObTop = array.new_float()
+var float[] bullObBot = array.new_float()
+var box[]   bearObBox = array.new_box()
+var float[] bearObTop = array.new_float()
+var float[] bearObBot = array.new_float()
+
+if bullBOS
+    for i = 1 to obLookback
+        if close[i] < open[i]
+            ob = box.new(bar_index[i], high[i], bar_index, low[i], border_color=color.new(color.teal, 40), bgcolor=color.new(color.teal, 85))
+            label.new(bar_index[i], low[i], "OB", style=label.style_label_up, color=color.new(color.teal, 100), textcolor=color.teal, size=size.tiny)
+            array.push(bullObBox, ob)
+            array.push(bullObTop, high[i])
+            array.push(bullObBot, low[i])
+            break
+if bearBOS
+    for i = 1 to obLookback
+        if close[i] > open[i]
+            ob = box.new(bar_index[i], high[i], bar_index, low[i], border_color=color.new(color.maroon, 40), bgcolor=color.new(color.maroon, 85))
+            label.new(bar_index[i], high[i], "OB", style=label.style_label_down, color=color.new(color.maroon, 100), textcolor=color.maroon, size=size.tiny)
+            array.push(bearObBox, ob)
+            array.push(bearObTop, high[i])
+            array.push(bearObBot, low[i])
+            break
+
+priceInBullOb = false
+if array.size(bullObBox) > 0
+    for j = array.size(bullObBox) - 1 to 0
+        bx = array.get(bullObBox, j)
+        top = array.get(bullObTop, j)
+        bot = array.get(bullObBot, j)
+        box.set_right(bx, bar_index)
+        if close < bot
+            array.remove(bullObBox, j)
+            array.remove(bullObTop, j)
+            array.remove(bullObBot, j)
+        else if close >= bot and close <= top
+            priceInBullOb := true
+
+priceInBearOb = false
+if array.size(bearObBox) > 0
+    for j = array.size(bearObBox) - 1 to 0
+        bx = array.get(bearObBox, j)
+        top = array.get(bearObTop, j)
+        bot = array.get(bearObBot, j)
+        box.set_right(bx, bar_index)
+        if close > top
+            array.remove(bearObBox, j)
+            array.remove(bearObTop, j)
+            array.remove(bearObBot, j)
+        else if close >= bot and close <= top
+            priceInBearOb := true
+
+// ============================================================
+// EQUILIBRIUM / PREMIUM-DISCOUNT
+// ============================================================
+var line eqLine = na
+var box  premiumBox = na
+var box  discountBox = na
+var float eqLevel = na
+
+rangeValid = not na(lastSwingHigh) and not na(lastSwingLow) and lastSwingHigh > lastSwingLow
+if rangeValid
+    eqLevel := (lastSwingHigh + lastSwingLow) / 2
+    leftBar = math.min(lastSwingHighBar, lastSwingLowBar)
+    if na(eqLine)
+        eqLine := line.new(leftBar, eqLevel, bar_index, eqLevel, color=color.new(color.gray, 30), style=line.style_dashed, width=1)
+        premiumBox := box.new(leftBar, lastSwingHigh, bar_index, eqLevel, border_color=na, bgcolor=color.new(color.red, 93))
+        discountBox := box.new(leftBar, eqLevel, bar_index, lastSwingLow, border_color=na, bgcolor=color.new(color.lime, 93))
+    else
+        line.set_xy1(eqLine, leftBar, eqLevel)
+        line.set_xy2(eqLine, bar_index, eqLevel)
+        box.set_lefttop(premiumBox, leftBar, lastSwingHigh)
+        box.set_rightbottom(premiumBox, bar_index, eqLevel)
+        box.set_lefttop(discountBox, leftBar, eqLevel)
+        box.set_rightbottom(discountBox, bar_index, lastSwingLow)
+
+inDiscount = not na(eqLevel) and close < eqLevel
+inPremium  = not na(eqLevel) and close > eqLevel
+
+// ============================================================
+// DOJI DETECTION (same 8-pattern classification as the main indicator)
+// ============================================================
+bodyHigh = math.max(open, close)
+bodyLow  = math.min(open, close)
+bodySize = bodyHigh - bodyLow
+candleRange = high - low
+isGreen = close >= open
+isRed   = close < open
+
+bodyPct  = candleRange > 0 ? bodySize / candleRange : 1.0
+upperPct = candleRange > 0 ? (high - bodyHigh) / candleRange : 0.0
+lowerPct = candleRange > 0 ? (bodyLow - low) / candleRange : 0.0
+
+isDojiBase   = candleRange > 0 and bodyPct <= dojiBodyMaxPct
+isDragonfly  = isDojiBase and upperPct <= oppWickMaxPct and lowerPct > oppWickMaxPct
+isGravestone = isDojiBase and lowerPct <= oppWickMaxPct and upperPct > oppWickMaxPct
+isCross      = isDojiBase and not isDragonfly and not isGravestone and upperPct > oppWickMaxPct and lowerPct > oppWickMaxPct and math.abs(upperPct - lowerPct) <= crossSymTolPct
+isLongLegged = isDojiBase and not isDragonfly and not isGravestone and not isCross and upperPct >= longLeggedWickMinPct and lowerPct >= longLeggedWickMinPct
+isPlainDoji  = isDojiBase and not isDragonfly and not isGravestone and not isCross and not isLongLegged
+
+bullishDojiFamily = (isPlainDoji and isGreen) or (isLongLegged and isGreen) or (isCross and isGreen) or (isDragonfly and isGreen)
+bearishDojiFamily = (isPlainDoji and isRed) or (isLongLegged and isRed) or (isCross and isRed) or (isGravestone and isRed)
+
+plotshape(bullishDojiFamily, title="Bullish Reversal Doji", style=shape.circle, location=location.belowbar, color=color.aqua, text="D", textcolor=color.aqua, size=size.tiny)
+plotshape(bearishDojiFamily, title="Bearish Reversal Doji", style=shape.circle, location=location.abovebar, color=color.fuchsia, text="D", textcolor=color.fuchsia, size=size.tiny)
+
+// ============================================================
+// SESSION / KILL-ZONE FILTER
+// ============================================================
+inLondon = not na(time(timeframe.period, londonSession, "America/New_York"))
+inNY     = not na(time(timeframe.period, nySession, "America/New_York"))
+
+var int londonStartTime = na
+var int nyStartTime = na
+if inLondon and not inLondon[1]
+    londonStartTime := time
+if inNY and not inNY[1]
+    nyStartTime := time
+
+londonMinsIn = inLondon and not na(londonStartTime) ? (time - londonStartTime) / 60000 : na
+nyMinsIn     = inNY and not na(nyStartTime) ? (time - nyStartTime) / 60000 : na
+
+inKillzone = (inLondon and not na(londonMinsIn) and londonMinsIn >= killzoneBufferMin) or (inNY and not na(nyMinsIn) and nyMinsIn >= killzoneBufferMin)
+sessionOK = not useSessionFilter or inKillzone
+
+// ============================================================
+// NEWS BLACKOUT FILTER
+// ============================================================
+event1Hit = time >= event1Time and time[1] < event1Time
+event2Hit = time >= event2Time and time[1] < event2Time
+if event1Hit
+    line.new(bar_index, low, bar_index, high, color=color.new(color.yellow, 0), style=line.style_dashed, width=2, extend=extend.both)
+    label.new(bar_index, high, event1Label, style=label.style_label_down, color=color.new(color.yellow, 70), textcolor=color.black, size=size.small)
+if event2Hit
+    line.new(bar_index, low, bar_index, high, color=color.new(color.yellow, 0), style=line.style_dashed, width=2, extend=extend.both)
+    label.new(bar_index, high, event2Label, style=label.style_label_down, color=color.new(color.yellow, 70), textcolor=color.black, size=size.small)
+
+inBlackout1 = time >= event1Time and time < event1Time + blackoutMins * 60000
+inBlackout2 = time >= event2Time and time < event2Time + blackoutMins * 60000
+newsOK = not useMacroFilter or not (inBlackout1 or inBlackout2)
+bgcolor(useMacroFilter and (inBlackout1 or inBlackout2) ? color.new(color.yellow, 85) : na, title="News No-Trade Window")
+
+// ============================================================
+// CONFLUENCE SCORING
+// ============================================================
+sweepLowRecent   = ta.barssince(sweepLow) <= sweepLookback
+sweepHighRecent  = ta.barssince(sweepHigh) <= sweepLookback
+bullBosRecent    = ta.barssince(bullBOS) <= bosLookback
+bearBosRecent    = ta.barssince(bearBOS) <= bosLookback
+bullDojiRecent   = ta.barssince(bullishDojiFamily) <= dojiLookback
+bearDojiRecent   = ta.barssince(bearishDojiFamily) <= dojiLookback
+
+longScore = (bias == "Uptrend" ? 1 : 0) + (sweepLowRecent ? 1 : 0) + (bullBosRecent ? 1 : 0) + (inDiscount ? 1 : 0) + ((priceInBullFvg or priceInBullOb) ? 1 : 0) + (bullDojiRecent ? 1 : 0)
+shortScore = (bias == "Downtrend" ? 1 : 0) + (sweepHighRecent ? 1 : 0) + (bearBosRecent ? 1 : 0) + (inPremium ? 1 : 0) + ((priceInBearFvg or priceInBearOb) ? 1 : 0) + (bearDojiRecent ? 1 : 0)
+
+// ============================================================
+// DAILY LOSS-STREAK HALT (rules.json: stop for the day after 2 losses)
+// ============================================================
+var int consecLosses = 0
+var int lossStreakDay = na
+var int prevClosedCount = 0
+if strategy.closedtrades > prevClosedCount
+    idx = strategy.closedtrades - 1
+    tradeProfit = strategy.closedtrades.profit(idx)
+    exitTime = strategy.closedtrades.exit_time(idx)
+    tDay = dayofmonth(exitTime)
+    if tDay != lossStreakDay
+        consecLosses := 0
+        lossStreakDay := tDay
+    consecLosses := tradeProfit < 0 ? consecLosses + 1 : 0
+    prevClosedCount := strategy.closedtrades
+
+haltForDay = lossStreakDay == dayofmonth(time) and consecLosses >= maxLossStreakDay
+
+// ============================================================
+// ENTRY / EXIT
+// ============================================================
+atrVal = ta.atr(atrLen)
+buffer = atrVal * atrBufferMult
+
+slLongRaw  = not na(sweptLowLevel) and sweepLowRecent ? sweptLowLevel : lastSwingLow
+slShortRaw = not na(sweptHighLevel) and sweepHighRecent ? sweptHighLevel : lastSwingHigh
+
+slLong  = not na(slLongRaw) ? slLongRaw - buffer : na
+slShort = not na(slShortRaw) ? slShortRaw + buffer : na
+
+riskDistLong  = not na(slLong) ? close - slLong : na
+riskDistShort = not na(slShort) ? slShort - close : na
+
+tpLong  = not na(riskDistLong) ? close + riskDistLong * rrMultiple : na
+tpShort = not na(riskDistShort) ? close - riskDistShort * rrMultiple : na
+
+qtyLong  = not na(riskDistLong) and riskDistLong > 0 ? (strategy.equity * riskPctPerTrade / 100) / riskDistLong : na
+qtyShort = not na(riskDistShort) and riskDistShort > 0 ? (strategy.equity * riskPctPerTrade / 100) / riskDistShort : na
+
+flat = strategy.position_size == 0
+
+longCondition  = flat and sessionOK and newsOK and not haltForDay and longScore >= minScore and not na(qtyLong) and qtyLong > 0
+shortCondition = flat and sessionOK and newsOK and not haltForDay and shortScore >= minScore and not na(qtyShort) and qtyShort > 0
+
+if longCondition
+    strategy.entry("Long", strategy.long, qty=qtyLong, alert_message="{{ticker}} {{interval}}: ICT Sniper LONG entry, score " + str.tostring(longScore) + "/6")
+    strategy.exit("Long Exit", from_entry="Long", stop=slLong, limit=tpLong,
+         comment_profit="TP", comment_loss="SL",
+         alert_profit="{{ticker}} {{interval}}: ICT Sniper LONG take-profit hit",
+         alert_loss="{{ticker}} {{interval}}: ICT Sniper LONG stop-loss hit")
+    label.new(bar_index, low - atrVal, "▲ LONG " + str.tostring(longScore) + "/6", style=label.style_label_up, color=color.new(color.lime, 0), textcolor=color.black, size=size.small)
+
+if shortCondition
+    strategy.entry("Short", strategy.short, qty=qtyShort, alert_message="{{ticker}} {{interval}}: ICT Sniper SHORT entry, score " + str.tostring(shortScore) + "/6")
+    strategy.exit("Short Exit", from_entry="Short", stop=slShort, limit=tpShort,
+         comment_profit="TP", comment_loss="SL",
+         alert_profit="{{ticker}} {{interval}}: ICT Sniper SHORT take-profit hit",
+         alert_loss="{{ticker}} {{interval}}: ICT Sniper SHORT stop-loss hit")
+    label.new(bar_index, high + atrVal, "▼ SHORT " + str.tostring(shortScore) + "/6", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+if barstate.islast
+    var table dash = table.new(position.top_right, 1, 5, border_width=1)
+    biasColor = bias == "Uptrend" ? color.new(color.lime, 70) : bias == "Downtrend" ? color.new(color.red, 70) : color.new(color.gray, 70)
+    table.cell(dash, 0, 0, "BIAS: " + bias, text_color=color.white, bgcolor=biasColor)
+    table.cell(dash, 0, 1, "Long Score: " + str.tostring(longScore) + "/6", text_color=color.white, bgcolor=color.new(color.lime, 80))
+    table.cell(dash, 0, 2, "Short Score: " + str.tostring(shortScore) + "/6", text_color=color.white, bgcolor=color.new(color.red, 80))
+    table.cell(dash, 0, 3, "Session OK: " + str.tostring(sessionOK) + "  News OK: " + str.tostring(newsOK), text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(dash, 0, 4, haltForDay ? "HALTED (loss streak)" : "Active", text_color=color.white, bgcolor=haltForDay ? color.new(color.red, 50) : color.new(color.gray, 80))
+
+// ============================================================
+// ALERTS (structure signals, in addition to the entry/exit order-fill alerts above)
+// ============================================================
+alertcondition(longCondition,  title="ICT Sniper Long Entry",  message="{{ticker}} {{interval}}: ICT Sniper LONG confluence entry")
+alertcondition(shortCondition, title="ICT Sniper Short Entry", message="{{ticker}} {{interval}}: ICT Sniper SHORT confluence entry")
+alertcondition(bullBOS,   title="Bullish BOS",            message="{{ticker}} {{interval}}: Bullish Break of Structure")
+alertcondition(bearBOS,   title="Bearish BOS",            message="{{ticker}} {{interval}}: Bearish Break of Structure")
+alertcondition(sweepHigh, title="Liquidity Sweep (High)", message="{{ticker}} {{interval}}: Liquidity sweep above swing high")
+alertcondition(sweepLow,  title="Liquidity Sweep (Low)",  message="{{ticker}} {{interval}}: Liquidity sweep below swing low")
