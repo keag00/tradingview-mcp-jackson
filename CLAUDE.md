@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A local MCP server + CLI (`tv`) that bridges Claude Code to a live TradingView Desktop app via the Chrome DevTools Protocol (CDP, port 9222). 81 MCP tools for reading chart state, developing Pine Script, driving chart UI, and running a rules-based "morning brief" over a watchlist. No data leaves the machine; no TradingView servers are contacted directly — everything goes through the already-authenticated Desktop app.
+A local MCP server + CLI (`tv`) that bridges Claude Code to a live TradingView Desktop app via the Chrome DevTools Protocol (CDP, port 9222). 82 MCP tools for reading chart state, developing Pine Script, driving chart UI, and running a rules-based "morning brief" over a watchlist. No data leaves the machine; no TradingView servers are contacted directly — everything goes through the already-authenticated Desktop app.
 
 ## Development
 
@@ -68,6 +68,10 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `data_get_ohlcv` with `summary: true` → compact stats (high, low, range, change%, avg volume, last 5 bars)
 - `data_get_ohlcv` without summary → all bars (use `count` to limit, default 100)
 - `quote_get` → single latest price snapshot
+
+### "What's the trend?" / "Is this trending or chopping?"
+- `data_get_trend_summary` → direction (EMA20/50 slope), strength (ADX/DMI — below 20 means no real trend), and swing structure (HH/HL vs LH/LL), computed straight from price bars — works even with no indicators on the chart. Included automatically per symbol in `morning_brief`.
+- This is single-timeframe/single-symbol. For trend agreement across multiple timeframes, currently pull the same tool after `chart_set_timeframe` on each interval — no dedicated multi-timeframe alignment tool yet.
 
 ### "Analyze my chart" (full report workflow)
 1. `quote_get` → current price
