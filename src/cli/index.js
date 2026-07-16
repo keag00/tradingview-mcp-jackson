@@ -30,6 +30,7 @@ import "./commands/tab.js";
 import "./commands/stream.js";
 import "./commands/morning.js";
 import "./commands/trade_alert.js";
+import "./commands/trend.js";
 
 // Run
 import { run } from "./router.js";
