@@ -1,5 +1,5 @@
 {
-  "watchlist": ["OANDA:GBPUSD"],
+  "watchlist": ["OANDA:GBPUSD", "OANDA:EURUSD"],
   "default_timeframe": "5",
   "scan_timeframes": ["15", "5", "1"],
 
@@ -32,5 +32,5 @@
     "If I have 2 losing trades in a row, stop for the day"
   ],
 
-  "notes": "GBPUSD via OANDA — do not use bare GBPUSD or FX:GBPUSD, they can resolve to the wrong instrument on this account (see ICT_STRATEGY_SPEC.md). Factor in BoE/Fed rate decisions and other macro events this week if relevant."
+  "notes": "GBPUSD and EURUSD via OANDA — do not use bare tickers or FX: prefixes, they can resolve to the wrong instrument on this account (see ICT_STRATEGY_SPEC.md). Factor in BoE/Fed/ECB rate decisions and other macro events this week if relevant."
 }
