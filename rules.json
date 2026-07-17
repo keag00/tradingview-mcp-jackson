@@ -32,5 +32,17 @@
     "If I have 2 losing trades in a row, stop for the day"
   ],
 
+  "ny_open_playbook": {
+    "description": "Applies bias_criteria/risk_rules specifically around the New York session open (0800-0930 ET), using the indicator's session H/L and PDH/PDL lines as the liquidity draw. See ICT_STRATEGY_SPEC.md 'New York Open Strategy' section for full detail.",
+    "steps": [
+      "07:30-08:00 ET prep: read trend-bias table, note Asia session H/L, London session H/L (still running), PDH/PDL, and current equilibrium (premium/discount) split. Check macroBias and blackoutMins — skip or reduce size if inside a blackout window.",
+      "Identify the draw on liquidity: whichever external level (Asia H/L, London H/L, or PDH/PDL) sits on the opposite side of price from the prevailing bias is the likely NY stop-run target.",
+      "08:00-08:15 ET: observe only, no entries (risk_rules). Watch for a liquidity-sweep flag on that level and/or the trend-bias table flipping to a live/unconfirmed BOS tag.",
+      "08:15 ET onward: require, in order — (1) liquidity sweep already fired, (2) BOS in the reversal direction (confirmed or live marker), (3) price on the discount side of equilibrium for longs / premium side for shorts, (4) an unmitigated FVG or Order Block between price and the swept level, (5) ideally a matching reversal doji at that FVG/OB as the entry trigger (sweep+BOS+FVG alone is sufficient per bias_criteria if no doji prints).",
+      "Stop loss beyond the wick that swept liquidity, not just below/above the entry candle.",
+      "Targets: TP1 = the opposing session high/low or nearest unmitigated opposite-side FVG/OB; TP2 runner = PDH/PDL. Skip the trade if the nearest liquidity target doesn't clear 1:2 R:R from the sweep-based stop."
+    ]
+  },
+
   "notes": "GBPUSD via OANDA — do not use bare GBPUSD or FX:GBPUSD, they can resolve to the wrong instrument on this account (see ICT_STRATEGY_SPEC.md). Factor in BoE/Fed rate decisions and other macro events this week if relevant."
 }

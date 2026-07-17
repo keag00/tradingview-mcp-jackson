@@ -72,8 +72,38 @@ Only the exact 8 color/shape combos above are marked (e.g. red dragonfly and gre
 
 `alertcondition()` calls are now wired up for the three actionable confirmed signals — **BOS** (bull/bear), **liquidity sweep** (high/low), and **FVG formed** (bull/bear) — 6 conditions total, selectable in TradingView's Alert dialog under this indicator's name. Doji patterns, order blocks, and PDH/PDL/session sweeps intentionally have no alerts, to keep the dropdown from turning into noise.
 
+## New York Open Strategy (added 2026-07-17)
+
+A concrete playbook for trading the NY session open using only signals this indicator already draws, built as a direct application of `rules.json`'s existing `bias_criteria`/`risk_rules` (not new criteria) — see `rules.json`'s `ny_open_playbook` key for the machine-readable version of the same steps. NY session per the indicator defaults to 0800-1700 ET; this playbook is scoped to the 0800-0930 ET open.
+
+**Core idea:** NY often runs the stops sitting just beyond the Asia/London session extremes (or the previous day's high/low) right after its open, then reverses. The playbook waits for that sweep, then trades the reversal using the same confluence `rules.json` already requires (bias + BOS + premium/discount + FVG/OB + doji-or-sweep) — it does not invent new signals.
+
+1. **07:30-08:00 ET — prep.** Read the trend-bias table (Uptrend/Downtrend/Range). Note the Asia session H/L line (frozen, session ended), the London session H/L line (still live-tracking, London runs 0300-1200 ET), and PDH/PDL. Note the equilibrium (50%) line for premium/discount. Check `macroBias` and whether any hand-entered event's `blackoutMins` window overlaps the open — if so, skip or size down.
+2. **Identify the draw on liquidity.** Whichever external level — Asia H/L, London H/L so far, or PDH/PDL — sits on the *opposite* side of price from the prevailing bias is the likely target of an NY stop-run. E.g., uptrend bias with price sitting near the Asia low → expect a sweep of the Asia low before NY pushes higher.
+3. **08:00-08:15 ET — observe only.** This matches the existing risk_rules ("no trading in the first 15 minutes of the NY session open") — treat it as a watch window, not a dead window. Watch for the indicator's liquidity-sweep flag firing on the level identified in step 2 (wick beyond it, close back inside), and/or the trend-bias table flipping via the live/unconfirmed BOS tag.
+4. **08:15 ET onward — confirmation and entry.** Long setup (mirror everything for short):
+   - Liquidity sweep of a swing low / the Asia or London low / PDL has already fired.
+   - A bullish BOS prints — confirmed line, or the live "BOS?" marker — on the 5m entry timeframe (cross-check 1m per `rules.json.scan_timeframes` for exact timing).
+   - Price sits in the **discount** zone (below the equilibrium line).
+   - An unmitigated bullish FVG or bullish Order Block sits between current price and the swept low.
+   - Ideal trigger: a bullish reversal doji (Green Dragonfly, Green Doji, Green Cross, or Green Long-Legged) prints at that FVG/OB. Per the existing bias_criteria this is "doji OR sweep," so sweep + BOS + FVG is already sufficient confluence if no doji forms — the doji just sharpens entry timing.
+   - Enter on the retest of the FVG/OB.
+5. **Stop loss:** beyond the actual wick that swept liquidity, not just beneath the entry candle — the whole premise is that the stop-hunt needed that room.
+6. **Targets:** TP1 = the opposing session high/low or the nearest unmitigated opposite-side FVG/OB; TP2 (runner) = PDH/PDL. If the nearest realistic liquidity target doesn't clear the existing 1:2 R:R minimum from the sweep-based stop, skip the trade — don't force it.
+7. **Risk management:** unchanged from `rules.json.risk_rules` — max 2 concurrent positions, stop for the day after 2 consecutive losses, respect the macro blackout window.
+
+**Running it with the existing tooling:**
+- `tv session-init` first thing to make sure the symbol and indicator are synced.
+- ~07:45-08:00 ET: `tv screenshot`, or `data_get_pine_labels`/`data_get_pine_boxes`/`chart_get_state`, to read the current session H/L, PDH/PDL, trend bias, and any unmitigated FVG/OB already on the chart.
+- 08:00-08:15 ET: watch for the liquidity-sweep `alertcondition` (already wired, see "Alerts" section above) or check `data_get_pine_labels` for a fresh sweep label.
+- 08:15 ET+: watch the BOS/FVG `alertcondition`s, confirm premium/discount position, check for a reversal doji via `chart_get_state`/screenshot before entering.
+- Optionally log the trade via `tv journal`/the replay tooling to track this specific playbook's hit rate over time, since none of these signals are backtested yet (see Known caveats).
+
+**Caveats specific to this playbook:** it inherits every caveat already listed above — Order Block detection is a simplified heuristic, doji thresholds are untuned defaults, confirmed BOS/swing structure lags by `swingLen` bars (the live BOS marker is the workaround), and `macroBias`/event times need periodic manual refresh. It's a discretionary framework for applying the existing indicator, not an automated signal — no backtesting has validated the NY-open timing specifically.
+
 ## Next steps (add to as the project grows)
 
 - (add new requirements here as they come up)
 - Re-confirm the performance fix visually in the live Pine Editor once the `pine_push`/`pine_pull` Monaco-fiber fragility isn't blocking (see caveat above)
 - Alerts still not wired up for BOS/FVG/sweep/OB conditions (carried over from "Known caveats")
+- Backtest the NY Open Strategy above against history (replay/journal tooling) once enough live samples exist to be worth checking
