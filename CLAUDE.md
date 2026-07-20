@@ -54,6 +54,7 @@ All Pine Editor work (`src/core/pine.js`, `pine_push.js`, `pine_pull.js`, and ev
 - The main connection (`findChartTarget()` / `getClient()` / `evaluate()`, used by every non-Pine tool) explicitly excludes the persisted Pine tab id, so chart/data/alert tools never accidentally attach to it.
 - A compiled/saved Pine script lands on the **Pine tab's own chart**, not the user's main chart — it's a separate scratch chart. To get a finished indicator onto the chart the user is actually watching, add it there explicitly with `chart_manage_indicator` (by name) once it's ready, or `tab_switch` to the Pine tab (flagged `is_pine_tab: true` in `tab_list` output) to inspect it directly.
 - **`ICT_STRATEGY_SPEC.md`** — living spec for an in-progress custom ICT/smart-money-concepts indicator built on top of this server; not part of the MCP server itself, just a working doc for that side project.
+- **`brain/README.md`** — the user's "Claude brain": saved references, strategy ideas, and media (videos in `brain/media/`) the user has asked Claude to remember. Check it when discussing strategy ideas; append new entries (newest first) when the user asks to save something to the brain.
 
 ### Trade alert watcher (Pushover)
 
