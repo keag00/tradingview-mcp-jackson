@@ -71,7 +71,32 @@ Keagan asked for a "90% profitable" strategy. That number isn't real — no rule
 - Verified via `tv pine analyze` (0 issues) and `tv pine check` (0 errors, 0 warnings) server-side compile. **Real backtest stats (win rate, profit factor, drawdown) have not been captured yet** — run it in the Strategy Tester on GBPUSD across a few timeframes/date ranges before trusting any number this produces, and don't assume performance transfers to other symbols or the current regime.
 - **Not yet loaded into TradingView itself.** Getting a genuinely *new* saved script's content set programmatically turned out to be unreliable in this TradingView Desktop build — every method tried (Monaco `setValue`/`executeEdits`, simulated keystrokes) either no-opped or corrupted the buffer; see the new "Known fragility" entry in `CLAUDE.md` for the full postmortem before attempting this again. The original `ICT Concepts + Doji Scanner [Keagan]` indicator was verified untouched throughout (diffed against `indicators/ict-concepts-doji-scanner.pine` and checked via `pine-facade`'s `modified` timestamp multiple times). **Manual step still needed:** open TradingView → Pine Editor → Create new → Strategy → paste in `indicators/ict-confluence-sniper-strategy.pine` → Save as "ICT Confluence Sniper [Keagan]" → Add to chart → open Strategy Tester.
 
+## Alert fix (added 2026-07-20)
+
+The 6 `alertcondition()` calls at the end of the strategy (long/short confluence entry, bullish/bearish BOS, liquidity sweep high/low) were no-ops — `alertcondition()` only functions inside `indicator()` scripts; TradingView's own compiler flags this with warning CW10017 inside a `strategy()`. Fixed by converting each to a guarded `alert()` call (`if <condition> \n alert(message, alert.freq_once_per_bar)`), using the conditions' existing one-shot guards so nothing double-fires. Verified via `tv pine check`: 0 errors, 0 warnings (the CW10017 warnings are gone). To receive all 10 possible notifications (4 order-fill alerts from `strategy.entry`/`strategy.exit`'s `alert_message`/`alert_profit`/`alert_loss`, plus these 6), create one TradingView alert on the script with condition **"Any alert() function call"** — that's the standard pattern for strategies with multiple distinct notification points.
+
+**Not yet re-pushed to the live TradingView script** — see the note in "Known fragility" in `CLAUDE.md` about a real, reproducible `FIND_MONACO` bug found and fixed in `src/core/pine.js` this session (it was using `querySelector`, grabbing the first — often stale/invisible — `.monaco-editor.pine-editor-monaco` match instead of scanning for the visible one). Even after that fix, a read-only Monaco inspection call caused TradingView's Pine Editor to spawn an unrelated blank "Unsaved version" tab; closed without saving, and the real cloud-saved script was verified untouched via a direct `pine-facade` fetch (422 lines, unchanged `modified` timestamp) before and after. Given that, a further automated push was judged too risky for a strategy that's already correctly loaded and compiling live — the safer path is a small manual copy-paste of just the new alert block (the last ~14 lines of [`indicators/ict-confluence-sniper-strategy.pine`](indicators/ict-confluence-sniper-strategy.pine), replacing the old 6 `alertcondition()` lines) into the existing "ICT Confluence Sniper" script in TradingView, then Save.
+
+## Backtest results (added 2026-07-20)
+
+Real Strategy Tester runs against the live "ICT Confluence Sniper" script on `OANDA:GBPUSD`, using whatever history TradingView's Basic plan had already loaded on the chart at each resolution (longer/"Deep Backtesting" ranges are Premium-gated on this account — see caveat below):
+
+| Timeframe | Range tested | `minScore` | Trades | Result |
+|---|---|---|---|---|
+| 1h | Jan 1, 2025 – Jul 20, 2026 (~18 months) | 5/6 (default) | 0 | No qualifying setups — confluence bar not cleared even once |
+| 1h | Jan 1, 2025 – Jul 20, 2026 (~18 months) | 3/6 (diagnostic) | 0 | Still zero — see caveat below on bar-based lookbacks |
+| 15m | Apr 30 – Jul 20, 2026 (~3 months) | 5/6 (default) | 0 | No qualifying setups |
+| 15m | Apr 30 – Jul 20, 2026 (~3 months) | 1/6 (diagnostic, mechanics check only) | 1 | 1 short trade, stopped out: **PnL −$104.37 (−1.04%), 0% win rate (0/1), profit factor 0, max drawdown $104.37 (1.04%)** |
+
+**Read this honestly, not optimistically:**
+- The one real trade above is a single data point at an artificially low, non-default threshold used purely to confirm the entry/exit/stop/target mechanics actually fire and settle correctly in the Strategy Tester (they do). It is not a performance result — 1 trade tells you nothing about win rate.
+- At the strategy's actual designed default (`minScore = 5/6`), **zero trades fired in either tested window.** That's a real, load-bearing finding: either the confluence bar is calibrated for genuinely rare "A+" setups and needs a much longer sample (a year-plus at native timeframe) to see any trades at all, or it's stricter than intended and needs recalibration — can't tell which from this data alone.
+- The strategy's recency windows (`sweepLookback`, `bosLookback`, `dojiLookback` — 6 to 10 bars) were designed assuming intraday bars (5m/15m). Testing on 1h changes what "recent" means for those windows and likely suppresses scoring further; 1h results shouldn't be read as informative about the strategy at its intended timeframe.
+- TradingView's Basic plan restricts the Strategy Tester to only whatever history is already loaded on the chart at the current resolution — going beyond that (e.g. "Entire history" on 5m, or even "Last 90 days" on 5m) triggers a "Deep Backtesting" Premium upsell instead of running the test. Real multi-month backtesting at 5m/15m — the strategy's actual intended timeframe — needs either a Premium plan or scrolling the chart far enough back to force more history into memory first.
+
 ## Next steps (add to as the project grows)
 
 - (add new requirements here as they come up)
-- Capture real Strategy Tester results (win rate, profit factor, max drawdown, trade count) for the confluence strategy above and record them here — not done yet
+- Manually paste the new alert block (see "Alert fix" above) into the live TradingView script and Save
+- Get a longer, native-timeframe (5m/15m) backtest sample — either via a Premium "Deep Backtesting" trial or by scrolling the chart back to load more history first — to get a real read on whether `minScore = 5/6` is calibrated correctly or too strict
+- Consider whether the confluence recency windows need separate tuning per timeframe if this strategy is ever tested on anything other than 5m/15m

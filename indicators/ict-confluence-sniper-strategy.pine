@@ -412,10 +412,19 @@ if barstate.islast
 
 // ============================================================
 // ALERTS (structure signals, in addition to the entry/exit order-fill alerts above)
+// alertcondition() has no effect inside strategy() scripts (CW10017) — use alert()
+// instead, each guarded by its own one-shot condition. Set up one TradingView alert
+// on "Any alert() function call" to catch all of these plus the order-fill alerts.
 // ============================================================
-alertcondition(longCondition,  title="ICT Sniper Long Entry",  message="{{ticker}} {{interval}}: ICT Sniper LONG confluence entry")
-alertcondition(shortCondition, title="ICT Sniper Short Entry", message="{{ticker}} {{interval}}: ICT Sniper SHORT confluence entry")
-alertcondition(bullBOS,   title="Bullish BOS",            message="{{ticker}} {{interval}}: Bullish Break of Structure")
-alertcondition(bearBOS,   title="Bearish BOS",            message="{{ticker}} {{interval}}: Bearish Break of Structure")
-alertcondition(sweepHigh, title="Liquidity Sweep (High)", message="{{ticker}} {{interval}}: Liquidity sweep above swing high")
-alertcondition(sweepLow,  title="Liquidity Sweep (Low)",  message="{{ticker}} {{interval}}: Liquidity sweep below swing low")
+if longCondition
+    alert("{{ticker}} {{interval}}: ICT Sniper LONG confluence entry", alert.freq_once_per_bar)
+if shortCondition
+    alert("{{ticker}} {{interval}}: ICT Sniper SHORT confluence entry", alert.freq_once_per_bar)
+if bullBOS
+    alert("{{ticker}} {{interval}}: Bullish Break of Structure", alert.freq_once_per_bar)
+if bearBOS
+    alert("{{ticker}} {{interval}}: Bearish Break of Structure", alert.freq_once_per_bar)
+if sweepHigh
+    alert("{{ticker}} {{interval}}: Liquidity sweep above swing high", alert.freq_once_per_bar)
+if sweepLow
+    alert("{{ticker}} {{interval}}: Liquidity sweep below swing low", alert.freq_once_per_bar)
