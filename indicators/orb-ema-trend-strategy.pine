@@ -1,0 +1,212 @@
+//@version=6
+strategy("ORB EMA Trend [Keagan]", shorttitle="ORB EMA", overlay=true,
+     initial_capital=25000, currency=currency.USD, default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract, commission_value=2.25, slippage=1,
+     pyramiding=0, calc_on_every_tick=false,
+     max_lines_count=200, max_boxes_count=50, max_labels_count=300)
+
+// ============================================================
+// Opening Range Breakout + EMA trend filter
+// Based on the mechanics shown in the @flexingjoetrades ORB reel
+// (see brain/README.md): mark the opening range, wait, only trade
+// breakouts (or retests of the broken level) that agree with the
+// EMA's slope, stop on the other side of the breakout level, target
+// a fixed R multiple. That reel is a 5-trade highlight clip, not a
+// verified track record — this exists so it can actually be backtested.
+// ============================================================
+
+// ── Inputs ──
+grpOR      = "Opening Range"
+grpEMA     = "EMA Trend Filter"
+grpEntry   = "Entry Logic"
+grpRisk    = "Risk Management"
+grpSess    = "Session"
+
+orMinutes   = input.int(5, "Opening Range Length (minutes)", minval=1, maxval=60, group=grpOR)
+
+emaLen      = input.int(21, "EMA Length", minval=1, group=grpEMA)
+emaSlopeLen = input.int(3, "EMA Slope Lookback (bars)", minval=1, group=grpEMA)
+
+useRetest       = input.bool(true, "Allow Retest Entries (not just first breakout)", group=grpEntry)
+requireHold     = input.bool(true, "Require Confirmed Hold (enter 1 bar after breakout, not on the breakout bar itself)", group=grpEntry)
+
+riskPctPerTrade = input.float(1.0, "Risk % of Equity per Trade", minval=0.1, maxval=10, group=grpRisk)
+rrMultiple      = input.float(2.5, "Reward:Risk Multiple (TP)", minval=1.0, maxval=10, group=grpRisk)
+atrLen          = input.int(14, "ATR Length (stop buffer)", minval=1, group=grpRisk)
+atrBufferMult   = input.float(0.15, "Stop Buffer (x ATR beyond breakout level)", minval=0, maxval=3, group=grpRisk)
+maxLossStreakDay = input.int(2, "Halt New Entries After N Losses (same day)", minval=1, maxval=10, group=grpRisk)
+
+rthSession    = input.session("0930-1600", "RTH Session (ET)", group=grpSess)
+entrySession  = input.session("0935-1545", "New-Entry Window (ET, after OR forms, before close chop)", group=grpSess)
+flatSession   = input.session("1555-1600", "Flat-by-Close Window (ET)", group=grpSess)
+
+// ============================================================
+// SESSION / TIME HELPERS
+// ============================================================
+inRTH   = not na(time(timeframe.period, rthSession, "America/New_York"))
+inEntry = not na(time(timeframe.period, entrySession, "America/New_York"))
+inFlat  = not na(time(timeframe.period, flatSession, "America/New_York"))
+
+newRTHDay = inRTH and not inRTH[1]
+
+// ============================================================
+// OPENING RANGE
+// ============================================================
+var float orHigh      = na
+var float orLow       = na
+var int   orStartTime = na
+var bool  orSet        = false
+var bool  longBreakoutActive  = false
+var bool  shortBreakoutActive = false
+
+if newRTHDay
+    orHigh := high
+    orLow := low
+    orStartTime := time
+    orSet := false
+    longBreakoutActive := false
+    shortBreakoutActive := false
+
+inORWindow = inRTH and not na(orStartTime) and (time - orStartTime) < orMinutes * 60000
+
+if inORWindow
+    orHigh := math.max(orHigh, high)
+    orLow := math.min(orLow, low)
+
+if inRTH and not na(orStartTime) and (time - orStartTime) >= orMinutes * 60000 and not orSet
+    orSet := true
+
+// ============================================================
+// EMA TREND FILTER
+// ============================================================
+emaVal    = ta.ema(close, emaLen)
+emaRising  = emaVal > emaVal[emaSlopeLen]
+emaFalling = emaVal < emaVal[emaSlopeLen]
+
+longBiasOK  = emaRising and close > emaVal
+shortBiasOK = emaFalling and close < emaVal
+
+// ============================================================
+// BREAKOUT / RETEST SIGNALS
+// ============================================================
+crossedAboveOrHigh = ta.crossover(close, orHigh)
+crossedBelowOrLow  = ta.crossunder(close, orLow)
+
+breakoutLongRaw  = orSet and not na(orHigh) and crossedAboveOrHigh
+breakoutShortRaw = orSet and not na(orLow)  and crossedBelowOrLow
+
+breakoutLongConfirmed  = requireHold ? (breakoutLongRaw[1] and close > orHigh) : breakoutLongRaw
+breakoutShortConfirmed = requireHold ? (breakoutShortRaw[1] and close < orLow) : breakoutShortRaw
+
+if breakoutLongRaw
+    longBreakoutActive := true
+if breakoutShortRaw
+    shortBreakoutActive := true
+
+// invalidate the setup if price fully reclaims the opposite side of the range
+if longBreakoutActive and close < orLow
+    longBreakoutActive := false
+if shortBreakoutActive and close > orHigh
+    shortBreakoutActive := false
+
+retestLong  = useRetest and longBreakoutActive and low <= orHigh and close > orHigh and not breakoutLongConfirmed
+retestShort = useRetest and shortBreakoutActive and high >= orLow and close < orLow and not breakoutShortConfirmed
+
+longSignal  = breakoutLongConfirmed or retestLong
+shortSignal = breakoutShortConfirmed or retestShort
+
+// ============================================================
+// DAILY LOSS-STREAK HALT
+// ============================================================
+var int consecLosses     = 0
+var int lossStreakDay    = na
+var int prevClosedCount  = 0
+
+if strategy.closedtrades > prevClosedCount
+    tradeProfit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    exitTime = strategy.closedtrades.exit_time(strategy.closedtrades - 1)
+    tDay = dayofmonth(exitTime)
+    if tDay != lossStreakDay
+        consecLosses := 0
+        lossStreakDay := tDay
+    consecLosses := tradeProfit < 0 ? consecLosses + 1 : 0
+    prevClosedCount := strategy.closedtrades
+
+haltForDay = lossStreakDay == dayofmonth(time) and consecLosses >= maxLossStreakDay
+
+// ============================================================
+// ENTRY / EXIT
+// ============================================================
+atrVal = ta.atr(atrLen)
+buffer = atrVal * atrBufferMult
+
+slLong  = orHigh - buffer
+slShort = orLow + buffer
+
+riskDistLong  = close - slLong
+riskDistShort = slShort - close
+
+tpLong  = close + riskDistLong * rrMultiple
+tpShort = close - riskDistShort * rrMultiple
+
+riskDollarsPerTrade = strategy.equity * riskPctPerTrade / 100
+qtyLong  = riskDistLong  > 0 ? riskDollarsPerTrade / (riskDistLong  * syminfo.pointvalue) : na
+qtyShort = riskDistShort > 0 ? riskDollarsPerTrade / (riskDistShort * syminfo.pointvalue) : na
+
+flat = strategy.position_size == 0
+
+longCondition  = flat and inEntry and orSet and longBiasOK  and longSignal  and not haltForDay and not na(qtyLong)  and qtyLong  > 0
+shortCondition = flat and inEntry and orSet and shortBiasOK and shortSignal and not haltForDay and not na(qtyShort) and qtyShort > 0
+
+if longCondition
+    strategy.entry("Long", strategy.long, qty=qtyLong, alert_message="{{ticker}} {{interval}}: ORB EMA LONG entry")
+    strategy.exit("Long Exit", from_entry="Long", stop=slLong, limit=tpLong,
+         comment_profit="TP", comment_loss="SL",
+         alert_profit="{{ticker}} {{interval}}: ORB EMA LONG take-profit hit",
+         alert_loss="{{ticker}} {{interval}}: ORB EMA LONG stop-loss hit")
+    longBreakoutActive := false
+    label.new(bar_index, low - atrVal, "▲ ORB LONG", style=label.style_label_up, color=color.new(color.lime, 0), textcolor=color.black, size=size.small)
+
+if shortCondition
+    strategy.entry("Short", strategy.short, qty=qtyShort, alert_message="{{ticker}} {{interval}}: ORB EMA SHORT entry")
+    strategy.exit("Short Exit", from_entry="Short", stop=slShort, limit=tpShort,
+         comment_profit="TP", comment_loss="SL",
+         alert_profit="{{ticker}} {{interval}}: ORB EMA SHORT take-profit hit",
+         alert_loss="{{ticker}} {{interval}}: ORB EMA SHORT stop-loss hit")
+    shortBreakoutActive := false
+    label.new(bar_index, high + atrVal, "▼ ORB SHORT", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+if inFlat and strategy.position_size != 0
+    strategy.close_all(comment="Flat by close", alert_message="{{ticker}} {{interval}}: ORB EMA flat-by-close exit")
+
+// ============================================================
+// PLOTS
+// ============================================================
+plot(emaVal, "EMA", color=emaRising ? color.new(color.lime, 30) : emaFalling ? color.new(color.red, 30) : color.new(color.gray, 30), linewidth=2)
+
+orHighPlot = plot(orSet or inORWindow ? orHigh : na, "OR High", color=color.new(color.yellow, 20), style=plot.style_linebr, linewidth=1)
+orLowPlot  = plot(orSet or inORWindow ? orLow  : na, "OR Low",  color=color.new(color.yellow, 20), style=plot.style_linebr, linewidth=1)
+fill(orHighPlot, orLowPlot, color=color.new(color.yellow, 90))
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+if barstate.islast
+    var table dash = table.new(position.top_right, 1, 5, border_width=1)
+    biasTxt = longBiasOK ? "LONG bias" : shortBiasOK ? "SHORT bias" : "No bias"
+    biasColor = longBiasOK ? color.new(color.lime, 70) : shortBiasOK ? color.new(color.red, 70) : color.new(color.gray, 70)
+    table.cell(dash, 0, 0, "EMA: " + biasTxt, text_color=color.white, bgcolor=biasColor)
+    table.cell(dash, 0, 1, orSet ? "OR: " + str.tostring(orLow, "#.##") + " - " + str.tostring(orHigh, "#.##") : "OR: forming...", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(dash, 0, 2, "In entry window: " + str.tostring(inEntry), text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(dash, 0, 3, "Position: " + (strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "Flat"), text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(dash, 0, 4, haltForDay ? "HALTED (loss streak)" : "Active", text_color=color.white, bgcolor=haltForDay ? color.new(color.red, 50) : color.new(color.gray, 80))
+
+// ============================================================
+// ALERTS (structure signals, in addition to the entry/exit order-fill alerts above)
+// alertcondition() has no effect inside strategy() scripts (CW10017) — use alert()
+// instead. Set up one TradingView alert on "Any alert() function call" to catch all.
+// ============================================================
+if longCondition
+    alert("{{ticker}} {{interval}}: ORB EMA LONG confluence entry", alert.freq_once_per_bar)
+if shortCondition
+    alert("{{ticker}} {{interval}}: ORB EMA SHORT confluence entry", alert.freq_once_per_bar)
