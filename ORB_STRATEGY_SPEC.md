@@ -27,6 +27,6 @@ Implemented in [`indicators/orb-ema-trend-strategy.pine`](indicators/orb-ema-tre
 
 ## Next steps
 
-- Get it into TradingView (new script — see `CLAUDE.md`'s "Known fragility" notes on why this needs to be a manual create-and-paste rather than automated, at least for the initial creation)
-- Run a real Strategy Tester pass once loaded and record actual win rate / profit factor / drawdown / trade count here — do not trust the reel's implied performance until this exists
+- ~~Get it into TradingView~~ — done 2026-07-20: live as "ORB EMA Trend [Keagan]" on the `CME_MINI:NQ1!` 5m chart, added via the Strategy Tester. Verified byte-for-byte against this repo's `.pine` file via a direct `pine-facade` cloud fetch, not just the visible editor.
+- Run a real Strategy Tester pass and record actual win rate / profit factor / drawdown / trade count here — do not trust the reel's implied performance until this exists. The default "Range from chart" window on first load was Jun 18 – Jul 20, 2026 with 0 trades ("This report requires trade data") — same Basic-plan data-availability caveat as the ICT confluence strategy likely applies; see `ICT_STRATEGY_SPEC.md`'s "Backtest results" section for how that showed up there.
 - Revisit EMA length / OR length / R multiple once there's a real trade sample to look at
