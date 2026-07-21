@@ -26,11 +26,14 @@ orMinutes   = input.int(5, "Opening Range Length (minutes)", minval=1, maxval=60
 
 emaLen      = input.int(21, "EMA Length", minval=1, group=grpEMA)
 emaSlopeLen = input.int(3, "EMA Slope Lookback (bars)", minval=1, group=grpEMA)
+useDailyTrendFilter = input.bool(true, "Require Daily EMA Trend Agreement (higher-timeframe filter)", group=grpEMA)
+dailyEmaLen = input.int(50, "Daily EMA Length", minval=1, group=grpEMA)
 
 useRetest       = input.bool(true, "Allow Retest Entries (not just first breakout)", group=grpEntry)
 requireHold     = input.bool(true, "Require Confirmed Hold (enter 1 bar after breakout, not on the breakout bar itself)", group=grpEntry)
+minBreakoutBufferMult = input.float(0.1, "Min Breakout Distance Beyond OR (x ATR, filters marginal breakouts)", minval=0, maxval=2, group=grpEntry)
 
-riskPctPerTrade = input.float(1.0, "Risk % of Equity per Trade", minval=0.1, maxval=10, group=grpRisk)
+riskPctPerTrade = input.float(0.5, "Risk % of Equity per Trade", minval=0.1, maxval=10, group=grpRisk)
 rrMultiple      = input.float(2.5, "Reward:Risk Multiple (TP)", minval=1.0, maxval=10, group=grpRisk)
 atrLen          = input.int(14, "ATR Length (stop buffer)", minval=1, group=grpRisk)
 atrBufferMult   = input.float(0.15, "Stop Buffer (x ATR beyond breakout level)", minval=0, maxval=3, group=grpRisk)
@@ -78,23 +81,31 @@ if inRTH and not na(orStartTime) and (time - orStartTime) >= orMinutes * 60000 a
     orSet := true
 
 // ============================================================
-// EMA TREND FILTER
+// EMA TREND FILTER (+ higher-timeframe daily agreement)
 // ============================================================
 emaVal    = ta.ema(close, emaLen)
 emaRising  = emaVal > emaVal[emaSlopeLen]
 emaFalling = emaVal < emaVal[emaSlopeLen]
 
-longBiasOK  = emaRising and close > emaVal
-shortBiasOK = emaFalling and close < emaVal
+dailyClose = request.security(syminfo.tickerid, "D", close, lookahead=barmerge.lookahead_off)
+dailyEma   = request.security(syminfo.tickerid, "D", ta.ema(close, dailyEmaLen), lookahead=barmerge.lookahead_off)
+dailyBullish = dailyClose > dailyEma
+dailyBearish = dailyClose < dailyEma
+
+longBiasOK  = emaRising  and close > emaVal and (not useDailyTrendFilter or dailyBullish)
+shortBiasOK = emaFalling and close < emaVal and (not useDailyTrendFilter or dailyBearish)
 
 // ============================================================
 // BREAKOUT / RETEST SIGNALS
 // ============================================================
+atrVal = ta.atr(atrLen)
+minBreakoutDist = atrVal * minBreakoutBufferMult
+
 crossedAboveOrHigh = ta.crossover(close, orHigh)
 crossedBelowOrLow  = ta.crossunder(close, orLow)
 
-breakoutLongRaw  = orSet and not na(orHigh) and crossedAboveOrHigh
-breakoutShortRaw = orSet and not na(orLow)  and crossedBelowOrLow
+breakoutLongRaw  = orSet and not na(orHigh) and crossedAboveOrHigh and (close - orHigh) >= minBreakoutDist
+breakoutShortRaw = orSet and not na(orLow)  and crossedBelowOrLow  and (orLow - close) >= minBreakoutDist
 
 breakoutLongConfirmed  = requireHold ? (breakoutLongRaw[1] and close > orHigh) : breakoutLongRaw
 breakoutShortConfirmed = requireHold ? (breakoutShortRaw[1] and close < orLow) : breakoutShortRaw
@@ -138,7 +149,6 @@ haltForDay = lossStreakDay == dayofmonth(time) and consecLosses >= maxLossStreak
 // ============================================================
 // ENTRY / EXIT
 // ============================================================
-atrVal = ta.atr(atrLen)
 buffer = atrVal * atrBufferMult
 
 slLong  = orHigh - buffer
@@ -193,14 +203,17 @@ fill(orHighPlot, orLowPlot, color=color.new(color.yellow, 90))
 // DASHBOARD
 // ============================================================
 if barstate.islast
-    var table dash = table.new(position.top_right, 1, 5, border_width=1)
+    var table dash = table.new(position.top_right, 1, 6, border_width=1)
     biasTxt = longBiasOK ? "LONG bias" : shortBiasOK ? "SHORT bias" : "No bias"
     biasColor = longBiasOK ? color.new(color.lime, 70) : shortBiasOK ? color.new(color.red, 70) : color.new(color.gray, 70)
     table.cell(dash, 0, 0, "EMA: " + biasTxt, text_color=color.white, bgcolor=biasColor)
-    table.cell(dash, 0, 1, orSet ? "OR: " + str.tostring(orLow, "#.##") + " - " + str.tostring(orHigh, "#.##") : "OR: forming...", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(dash, 0, 2, "In entry window: " + str.tostring(inEntry), text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(dash, 0, 3, "Position: " + (strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "Flat"), text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(dash, 0, 4, haltForDay ? "HALTED (loss streak)" : "Active", text_color=color.white, bgcolor=haltForDay ? color.new(color.red, 50) : color.new(color.gray, 80))
+    dailyTxt = dailyBullish ? "Daily: Bullish" : dailyBearish ? "Daily: Bearish" : "Daily: Flat"
+    dailyColor = dailyBullish ? color.new(color.lime, 70) : dailyBearish ? color.new(color.red, 70) : color.new(color.gray, 70)
+    table.cell(dash, 0, 1, dailyTxt, text_color=color.white, bgcolor=dailyColor)
+    table.cell(dash, 0, 2, orSet ? "OR: " + str.tostring(orLow, "#.##") + " - " + str.tostring(orHigh, "#.##") : "OR: forming...", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(dash, 0, 3, "In entry window: " + str.tostring(inEntry), text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(dash, 0, 4, "Position: " + (strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "Flat"), text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(dash, 0, 5, haltForDay ? "HALTED (loss streak)" : "Active", text_color=color.white, bgcolor=haltForDay ? color.new(color.red, 50) : color.new(color.gray, 80))
 
 // ============================================================
 // ALERTS (structure signals, in addition to the entry/exit order-fill alerts above)
