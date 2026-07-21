@@ -2,7 +2,7 @@
 strategy("ORB EMA Trend [Keagan]", shorttitle="ORB EMA", overlay=true,
      initial_capital=25000, currency=currency.USD, default_qty_type=strategy.fixed, default_qty_value=1,
      commission_type=strategy.commission.cash_per_contract, commission_value=2.25, slippage=1,
-     pyramiding=0, calc_on_every_tick=false,
+     pyramiding=0, calc_on_every_tick=false, margin_long=0, margin_short=0,
      max_lines_count=200, max_boxes_count=50, max_labels_count=300)
 
 // ============================================================
@@ -35,6 +35,7 @@ rrMultiple      = input.float(2.5, "Reward:Risk Multiple (TP)", minval=1.0, maxv
 atrLen          = input.int(14, "ATR Length (stop buffer)", minval=1, group=grpRisk)
 atrBufferMult   = input.float(0.15, "Stop Buffer (x ATR beyond breakout level)", minval=0, maxval=3, group=grpRisk)
 maxLossStreakDay = input.int(2, "Halt New Entries After N Losses (same day)", minval=1, maxval=10, group=grpRisk)
+maxQtyPerTrade  = input.int(20, "Max Contracts/Shares Per Trade (safety cap, prevents blowups from tiny stop distances)", minval=1, group=grpRisk)
 
 rthSession    = input.session("0930-1600", "RTH Session (ET)", group=grpSess)
 entrySession  = input.session("0935-1545", "New-Entry Window (ET, after OR forms, before close chop)", group=grpSess)
@@ -150,8 +151,8 @@ tpLong  = close + riskDistLong * rrMultiple
 tpShort = close - riskDistShort * rrMultiple
 
 riskDollarsPerTrade = strategy.equity * riskPctPerTrade / 100
-qtyLong  = riskDistLong  > 0 ? riskDollarsPerTrade / (riskDistLong  * syminfo.pointvalue) : na
-qtyShort = riskDistShort > 0 ? riskDollarsPerTrade / (riskDistShort * syminfo.pointvalue) : na
+qtyLong  = riskDistLong  > 0 ? math.min(maxQtyPerTrade, math.max(1, math.round(riskDollarsPerTrade / (riskDistLong  * syminfo.pointvalue)))) : na
+qtyShort = riskDistShort > 0 ? math.min(maxQtyPerTrade, math.max(1, math.round(riskDollarsPerTrade / (riskDistShort * syminfo.pointvalue)))) : na
 
 flat = strategy.position_size == 0
 
