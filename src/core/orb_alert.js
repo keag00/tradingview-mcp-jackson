@@ -112,21 +112,45 @@ async function getFilledOrders(entityId) {
 /**
  * Polls filledOrders() until the count is identical across consecutive
  * reads (reportData() can return transient/stale values right after a
- * symbol switch or recalculation — see CLAUDE.md).
+ * symbol switch or recalculation — see CLAUDE.md). Requires 3 consecutive
+ * matches, not 2 — 2 was observed to still occasionally lock onto a stale
+ * reading (a genuine GBPUSD price leaking into a Gold check) during testing.
  */
-async function getStableFilledOrders(entityId, { maxAttempts = 6, gapMs = 2500 } = {}) {
+async function getStableFilledOrders(entityId, { maxAttempts = 8, gapMs = 2500, requiredStreak = 3 } = {}) {
   let last = null;
   let stableStreak = 0;
-  for (let i = 0; i < maxAttempts && stableStreak < 2; i++) {
-    const orders = await getFilledOrders(entityId);
+  let orders = null;
+  for (let i = 0; i < maxAttempts && stableStreak < requiredStreak; i++) {
+    orders = await getFilledOrders(entityId);
     const len = orders ? orders.length : 0;
     if (last !== null && len === last) stableStreak++;
     else stableStreak = 0;
     last = len;
-    if (stableStreak < 2) await new Promise((r) => setTimeout(r, gapMs));
-    if (i === maxAttempts - 1) return orders;
+    if (stableStreak < requiredStreak) await new Promise((r) => setTimeout(r, gapMs));
   }
-  return getFilledOrders(entityId);
+  return orders;
+}
+
+function tickerPart(symbol) {
+  const idx = symbol.lastIndexOf(":");
+  return (idx === -1 ? symbol : symbol.slice(idx + 1)).toUpperCase();
+}
+
+/**
+ * Confirms the chart actually resolved to the requested symbol before
+ * trusting any report read against it — TradingView can silently fall back
+ * to a different (previously-loaded) symbol on a failed switch, with
+ * `chart_ready`/`state` still reporting a plausible-looking success. See
+ * CLAUDE.md's "tv symbol --set" fragility notes.
+ */
+async function verifySymbolResolved(symbol, { maxAttempts = 5, gapMs = 1500 } = {}) {
+  const wantTicker = tickerPart(symbol);
+  for (let i = 0; i < maxAttempts; i++) {
+    const state = await chart.getState();
+    if (state && tickerPart(state.symbol) === wantTicker) return true;
+    await new Promise((r) => setTimeout(r, gapMs));
+  }
+  return false;
 }
 
 export async function checkOrbSignal({ symbols, dry_run = false } = {}) {
@@ -157,6 +181,13 @@ export async function checkOrbSignal({ symbols, dry_run = false } = {}) {
     try {
       await chart.setSymbol({ symbol });
       await new Promise((r) => setTimeout(r, 1200));
+
+      const resolved = await verifySymbolResolved(symbol);
+      if (!resolved) {
+        checked.push({ symbol, error: "Chart did not resolve to this symbol — skipped to avoid reading another symbol's data" });
+        continue;
+      }
+
       await chart.setTimeframe({ timeframe: STRATEGY_TIMEFRAME });
       await new Promise((r) => setTimeout(r, 1200));
 
@@ -165,9 +196,29 @@ export async function checkOrbSignal({ symbols, dry_run = false } = {}) {
       const orderCount = orders ? orders.length : 0;
 
       const symbolState = state[symbol] || {};
-      const lastSeenCount = symbolState.filledOrderCount ?? orderCount;
-      const newOrders = orders ? orders.slice(lastSeenCount) : [];
-      const newEntries = newOrders.filter((o) => o.e === true);
+      // The backtest window is "Range from chart", which rolls forward with
+      // real time — old fills fall off the front, so filledOrders.length can
+      // *shrink*. Tracking a raw array index/count would silently miss new
+      // entries once the array is shorter than the last-seen count. Instead,
+      // track a fingerprint of the last entry order we actually alerted/
+      // synced on, find it by scanning from the end, and take everything
+      // after it. If it's not found (rolled off the window, or first run
+      // ever for this symbol) resync silently rather than risk either
+      // missing a real signal or re-alerting on stale history.
+      const lastFp = symbolState.lastEntryFingerprint ?? null;
+      let newEntries = [];
+      if (orders) {
+        if (lastFp === null) {
+          newEntries = []; // first run for this symbol — establish baseline only
+        } else {
+          const idx = orders.findLastIndex(
+            (o) => o.e === true && `${o.c}:${o.p}:${o.q}` === lastFp,
+          );
+          newEntries = idx === -1
+            ? [] // fingerprint rolled off the window — resync, don't guess
+            : orders.slice(idx + 1).filter((o) => o.e === true);
+        }
+      }
 
       checked.push({ symbol, filled_order_count: orderCount, new_entries: newEntries.length });
 
@@ -219,7 +270,12 @@ export async function checkOrbSignal({ symbols, dry_run = false } = {}) {
       }
 
       if (!dry_run) {
-        symbolState.filledOrderCount = orderCount;
+        const allEntries = orders ? orders.filter((o) => o.e === true) : [];
+        const newestEntry = allEntries[allEntries.length - 1];
+        if (newestEntry) {
+          symbolState.lastEntryFingerprint = `${newestEntry.c}:${newestEntry.p}:${newestEntry.q}`;
+        }
+        symbolState.filledOrderCount = orderCount; // kept for visibility/debugging only, not used for diffing
         state[symbol] = symbolState;
       }
     } catch (err) {
