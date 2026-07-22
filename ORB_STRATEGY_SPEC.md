@@ -112,9 +112,23 @@ Same strategy, same ~82-day window, same methodology (`reportData()` polled to s
 
 **Read this honestly:** this is a screening pass across sixteen single-regime, ~82-day snapshots, not sixteen independent verdicts — many of these markets share macro drivers (the FX pairs and Dollar Index are mechanically related; equity indices tend to correlate), so don't read "8 winners, 8 losers" as more statistically meaningful than it is. Gold's result is the one worth actually tracking forward; everything else here is exploratory context for that pick, not a portfolio.
 
-## Pushover alerting (added 2026-07-22)
+## Pushover alerting (added 2026-07-22, running continuously as of the same day)
 
-`tv orb-alert check` (`src/core/orb_alert.js`) watches the live strategy on `ORB_ALERT_SYMBOLS` (default `COMEX:GC1!`) and pushes a real Pushover notification the moment it places a genuine new order — no LLM judgment call, the strategy's own tuned entry logic is the signal. See the "ORB strategy alert watcher" section in `CLAUDE.md` for the full mechanism (it reads `reportData().filledOrders`, not `.trades`, specifically so it can catch an entry before the trade closes). Verified end-to-end 2026-07-22: detection/message-building logic confirmed via a `--dry-run` simulation, and raw Pushover connectivity confirmed with a real, clearly-labeled test push to the configured device. Not yet scheduled to run continuously — copy `scripts/com.tradingview-mcp.orb-alert.plist.example` to set that up (see the file for exact steps).
+`tv orb-alert check` (`src/core/orb_alert.js`) watches the live strategy on `ORB_ALERT_SYMBOLS` and pushes a real Pushover notification the moment it places a genuine new order — no LLM judgment call, the strategy's own tuned entry logic is the signal. See the "ORB strategy alert watcher" section in `CLAUDE.md` for the full mechanism (it reads `reportData().filledOrders`, not `.trades`, specifically so it can catch an entry before the trade closes). Verified end-to-end: detection/message-building logic confirmed via a `--dry-run` simulation, and raw Pushover connectivity confirmed with a real, clearly-labeled test push to the configured device.
+
+**Now scheduled and running continuously** via `launchctl` (`~/Library/LaunchAgents/com.tradingview-mcp.orb-alert.plist`, checking every 5 minutes) — currently watching `COMEX:GC1!` and `OANDA:GBPUSD` (see the GBPUSD section below for why that second symbol is there despite a bad backtest). The plist points at this worktree's directory, not the main checkout, since this code isn't merged yet — it'll keep working as long as the worktree exists, but needs repointing (and reloading) once the PR is merged and the worktree is cleaned up.
+
+A real production bug was caught and fixed within the first hour of running: `study.study()` can return null right after a symbol switch (the strategy model isn't loaded yet), and the original code let that throw instead of handling it — now surfaced as an explicit "not ready, skipped this cycle" entry, self-recovering on the next tick. See the git history for `src/core/orb_alert.js` for the fix.
+
+## GBPUSD (spot forex) backtest — real edge or no edge? (2026-07-22)
+
+Keagan asked to trade the GBPUSD market open and wanted the strategy watching it. Backtested first, honestly, before setting up the alert: **31 trades, 0% win rate — every single trade lost**, both sides (13 long: −$26.02, 18 short: −$35.89), net −$61.92 on `OANDA:GBPUSD` 15m over the same ~82-day window. Confirmed via both `reportData()` (polled to stability, chart resolution/symbol re-verified given how often those silently drifted mid-session) and a direct visual check of the Strategy Tester's trade list, which matched.
+
+**This is not the same as "GBPUSD has no edge" on its own** — two confounding issues, not yet disentangled:
+1. **Position sizing was capped at `maxQtyPerTrade` (20) on every single trade** — meaning the intended 0.5%-risk-per-trade sizing was never actually being expressed; spot FX's point-value mechanics via `syminfo.pointvalue` don't scale against typical ATR-based stop distances the same way the futures/commodities markets tested here do. The dollar amounts above are small specifically *because* of this, not because the strategy is barely losing.
+2. Separately, `6B1!` (GBP **futures**, CME) tested profitably in the main sweep above (36 trades, +$1,034, PF 1.27) — the *same underlying currency pair*, different instrument mechanics, opposite result. That strongly suggests the sizing/mechanics issue (point 1) is doing real damage to the spot-GBPUSD read, not that GBP itself is a bad market for this strategy.
+
+Given real money was about to be risked and there wasn't time to properly investigate before the open, the honest call was made to flag this clearly to Keagan rather than either hide it or unilaterally decide not to set up the alert — he chose to have it watch GBPUSD anyway and judge entries himself, eyes open about the backtest. **Before trusting this instrument's alerts as a real signal (not just "interesting to watch"), the position-sizing-for-spot-FX issue needs a real fix and a clean re-run** — likely either a spot-FX-specific quantity calculation, or accepting that this strategy is futures/commodities-native and spot forex needs its own sizing model entirely.
 
 ## Next steps
 
@@ -122,7 +136,9 @@ Same strategy, same ~82-day window, same methodology (`reportData()` polled to s
 - ~~Run a real Strategy Tester pass~~ — done 2026-07-21 (v1), refined 2026-07-21 (v2).
 - ~~Add a daily trend filter and tighten entries/sizing~~ — done 2026-07-21, see v2 results above.
 - ~~Test more markets~~ — done 2026-07-21/22: expanded from 3 to 16 markets across every major asset class. Gold is the standing top pick.
-- ~~Connect to Pushover alerts~~ — done 2026-07-22, see above. Still needs to actually be scheduled (launchd) to run unattended.
+- ~~Connect to Pushover alerts~~ — done 2026-07-22, and now actually scheduled/running continuously via launchd, see above.
 - Get a longer sample (Premium "Deep Backtesting" trial, or wait and accumulate more real trading days/alerts) before trusting the Gold result beyond "promising, worth continuing to track" — 30 trades in one regime is a thin reed for a strategy this good-looking.
-- Fix stock position sizing (the `maxQtyPerTrade` cap is binding almost every stock trade, meaning risk-% sizing isn't really being tested for equities) before drawing any real conclusion about individual stocks.
+- Fix position sizing for low-point-value/spot instruments (the `maxQtyPerTrade` cap is binding almost every stock *and* spot-FX trade — see the GBPUSD section above — meaning risk-% sizing isn't really being tested for either) before drawing any real conclusion about equities or spot forex specifically.
+- Once the sizing issue is fixed, re-run GBPUSD cleanly and decide whether to keep it in the alert watcher based on real numbers, not the honest-but-confounded 0%-win-rate read it has today.
 - Consider whether the daily filter should also gate scoring/logging on the *filtered-out* side (e.g. record what a disallowed short would have done) to distinguish "the filter avoided real losses" from "the filter just reduced sample size" per market.
+- Repoint `~/Library/LaunchAgents/com.tradingview-mcp.orb-alert.plist` at the main checkout once this PR is merged and the worktree is no longer needed.
