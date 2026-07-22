@@ -81,12 +81,48 @@ Same methodology (`reportData()` polled to stability, same ~82-day Apr 30 – Ju
 - Buy-and-hold gold over the same window actually *lost* money (−$47,330 buy-and-hold return) while the strategy made +$27,875 — a case where the strategy's short-only, trend-aligned approach clearly added value beyond just being long a rising market, unlike the NQ1! v1 result where buy-and-hold had won.
 - Still an ~82-day sample throughout, for the same TradingView Basic-plan data-availability reason documented in v1.
 
+## Commission model fix (2026-07-22)
+
+Switched `commission_type` from `strategy.commission.cash_per_contract` ($2.25) to `strategy.commission.cash_per_order` ($1 flat per order). The per-contract model is a futures assumption that becomes absurd applied per-*share* to a stock (effectively $2.25/share — TSLA's original read was corrupted by this); a flat per-order fee is a reasonable universal approximation for both asset classes without needing per-instrument configuration. Gold and Silver were re-verified under the new model (negligible difference, as expected — a few dollars per trade at most). NQ1!, ES1!, RTY1!, YM1!, and CL1!'s v2 numbers above were captured just before this fix and were not individually re-verified after — expect them to be accurate to within a few dollars per trade, not materially different.
+
+## Full market sweep — v2 (2026-07-22)
+
+Same strategy, same ~82-day window, same methodology (`reportData()` polled to stability, chart resolution/symbol verified via `tv state` after every switch — see `CLAUDE.md` for the specific traps hit doing this: stale screenshots, silent resolution drift, phantom intermediate readings). Expanded from the original six markets to sixteen, spanning equity indices, metals, energy, currencies, crypto, and two individual stocks (with the commission fix applied, unlike the original TSLA read):
+
+| Market | Trades | Net P&L | Win rate | Profit factor | Max drawdown |
+|---|---|---|---|---|---|
+| **GC1! (Gold, COMEX)** | 30 | **+$27,950** | 40.0% | **3.42** | $7,607 |
+| NVDA (stock, NASDAQ) | 14 | +$113 | 42.9% | 1.69 | $83 |
+| NG1! (Natural Gas, NYMEX) | 30 | +$1,969 | 46.7% | 1.60 | $1,167 |
+| NQ1! (Nasdaq E-mini) | 52 | +$15,881 | 26.9% | 1.37 | $12,360 |
+| CL1! (Crude Oil, NYMEX) | 40 | +$3,353 | 37.5% | 1.31 | $5,608 |
+| 6B1! (British Pound, CME) | 36 | +$1,034 | 44.4% | 1.27 | $1,625 |
+| 6E1! (Euro FX, CME) | 49 | +$932 | 40.8% | 1.18 | $1,925 |
+| TSLA (stock, NASDAQ) | 16 | +$39 | 25.0% | 1.10 | $216 |
+| SI1! (Silver, COMEX) | 32 | −$1,339 | 31.3% | 0.96 | $19,150 |
+| RTY1! (Russell 2000 E-mini) | 50 | −$610 | 26.0% | 0.94 | $3,220 |
+| HG1! (Copper, COMEX) | 43 | −$2,424 | 23.3% | 0.77 | $4,148 |
+| YM1! (Dow, CBOT) | 49 | −$3,416 | 14.3% | 0.75 | $5,629 |
+| DX1! (US Dollar Index, ICE) | 65 | −$2,075 | 32.3% | 0.73 | $2,965 |
+| ES1! (S&P 500 E-mini) | 48 | −$5,091 | 25.0% | 0.70 | $6,428 |
+| BTCUSD (Bitcoin, Coinbase) | 61 | −$4,379 | 24.6% | 0.59 | $5,024 |
+| 6J1! (Japanese Yen, CME) | 69 | −$5,201 | 29.0% | 0.47 | $5,767 |
+
+**Gold remains the standout by a wide margin** — highest profit factor and win rate of anything tested, on real (if thin) sample size. 8 of 16 markets were net profitable (profit factor > 1); metals, energy, and the major "risk-on" currencies (GBP, EUR) did well, while the Dollar Index, Yen, Bitcoin, and Copper were clear losers. Stocks (TSLA, NVDA) were essentially non-events either way — very small trade counts (14–16) and the `maxQtyPerTrade` safety cap (20) binding almost every trade, meaning the risk-% sizing model is significantly under-expressing itself on lower-point-value instruments; a stock-specific sizing recalibration would be needed before drawing any real conclusion about equities.
+
+**Read this honestly:** this is a screening pass across sixteen single-regime, ~82-day snapshots, not sixteen independent verdicts — many of these markets share macro drivers (the FX pairs and Dollar Index are mechanically related; equity indices tend to correlate), so don't read "8 winners, 8 losers" as more statistically meaningful than it is. Gold's result is the one worth actually tracking forward; everything else here is exploratory context for that pick, not a portfolio.
+
+## Pushover alerting (added 2026-07-22)
+
+`tv orb-alert check` (`src/core/orb_alert.js`) watches the live strategy on `ORB_ALERT_SYMBOLS` (default `COMEX:GC1!`) and pushes a real Pushover notification the moment it places a genuine new order — no LLM judgment call, the strategy's own tuned entry logic is the signal. See the "ORB strategy alert watcher" section in `CLAUDE.md` for the full mechanism (it reads `reportData().filledOrders`, not `.trades`, specifically so it can catch an entry before the trade closes). Verified end-to-end 2026-07-22: detection/message-building logic confirmed via a `--dry-run` simulation, and raw Pushover connectivity confirmed with a real, clearly-labeled test push to the configured device. Not yet scheduled to run continuously — copy `scripts/com.tradingview-mcp.orb-alert.plist.example` to set that up (see the file for exact steps).
+
 ## Next steps
 
 - ~~Get it into TradingView~~ — done 2026-07-20.
 - ~~Run a real Strategy Tester pass~~ — done 2026-07-21 (v1), refined 2026-07-21 (v2).
 - ~~Add a daily trend filter and tighten entries/sizing~~ — done 2026-07-21, see v2 results above.
-- ~~Test more markets~~ — done 2026-07-21: Gold, Crude Oil, and Dow added alongside the original three indices. Gold is now the top pick.
-- Get a longer sample (Premium "Deep Backtesting" trial, or wait and accumulate more real trading days) before trusting the Gold result beyond "promising, worth continuing to track" — 30 trades in one regime is a thin reed for a strategy this good-looking.
-- If testing on stocks specifically, fix the commission model (per-share, not per-"contract") and re-run cleanly before drawing any conclusion about equities.
+- ~~Test more markets~~ — done 2026-07-21/22: expanded from 3 to 16 markets across every major asset class. Gold is the standing top pick.
+- ~~Connect to Pushover alerts~~ — done 2026-07-22, see above. Still needs to actually be scheduled (launchd) to run unattended.
+- Get a longer sample (Premium "Deep Backtesting" trial, or wait and accumulate more real trading days/alerts) before trusting the Gold result beyond "promising, worth continuing to track" — 30 trades in one regime is a thin reed for a strategy this good-looking.
+- Fix stock position sizing (the `maxQtyPerTrade` cap is binding almost every stock trade, meaning risk-% sizing isn't really being tested for equities) before drawing any real conclusion about individual stocks.
 - Consider whether the daily filter should also gate scoring/logging on the *filtered-out* side (e.g. record what a disallowed short would have done) to distinguish "the filter avoided real losses" from "the filter just reduced sample size" per market.

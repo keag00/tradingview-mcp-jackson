@@ -1,7 +1,7 @@
 //@version=6
 strategy("ORB EMA Trend [Keagan]", shorttitle="ORB EMA", overlay=true,
      initial_capital=25000, currency=currency.USD, default_qty_type=strategy.fixed, default_qty_value=1,
-     commission_type=strategy.commission.cash_per_contract, commission_value=2.25, slippage=1,
+     commission_type=strategy.commission.cash_per_order, commission_value=1.0, slippage=1,
      pyramiding=0, calc_on_every_tick=false, margin_long=0, margin_short=0,
      max_lines_count=200, max_boxes_count=50, max_labels_count=300)
 

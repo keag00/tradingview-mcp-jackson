@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs `tv orb-alert check` every 5 minutes via launchd (macOS) — watches the
+  live "ORB EMA Trend [Keagan]" strategy on your symbol list and notifies you
+  (Pushover) the moment it enters a real trade. No LLM call involved: the
+  Pine strategy's own tuned entry logic is the signal, so this is fast
+  (a few seconds per symbol) and cheap compared to trade-alert's multi-
+  timeframe Claude scan — 5 minutes is a reasonable default, not a floor.
+  This only evaluates and notifies you when TradingView Desktop is already
+  running with CDP enabled (see ./scripts/launch_tv_debug_mac.sh) — it does
+  not launch TradingView itself.
+
+  Setup:
+    1. Replace REPLACE_WITH_PROJECT_DIR below with the absolute path to this
+       repo (e.g. /Users/you/tradingview-mcp-jackson) — three occurrences.
+    2. Replace REPLACE_WITH_NODE_PATH with the absolute path to `node`
+       (run `which node` to find it).
+    3. Set ORB_ALERT_SYMBOLS (comma-separated, e.g. "COMEX:GC1!,CME_MINI:NQ1!")
+       and ORB_ALERT_COOLDOWN_MINUTES in your .env — see .env.example.
+    4. Copy this file (renamed, dropping .example) to:
+         ~/Library/LaunchAgents/com.tradingview-mcp.orb-alert.plist
+    5. Load it:
+         launchctl load ~/Library/LaunchAgents/com.tradingview-mcp.orb-alert.plist
+    6. Check logs at REPLACE_WITH_PROJECT_DIR/orb-alert.log
+    7. To stop: launchctl unload ~/Library/LaunchAgents/com.tradingview-mcp.orb-alert.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradingview-mcp.orb-alert</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPLACE_WITH_NODE_PATH</string>
+    <string>REPLACE_WITH_PROJECT_DIR/src/cli/index.js</string>
+    <string>orb-alert</string>
+    <string>check</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPLACE_WITH_PROJECT_DIR</string>
+
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>StandardOutPath</key>
+  <string>REPLACE_WITH_PROJECT_DIR/orb-alert.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>REPLACE_WITH_PROJECT_DIR/orb-alert.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
