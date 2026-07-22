@@ -102,7 +102,10 @@ async function getFilledOrders(entityId) {
     (function() {
       var study = ${CHART_API}.getStudyById('${entityId}');
       if (!study) return null;
-      var report = study.study().reportData();
+      var model = study.study();
+      if (!model) return null; // strategy model not ready yet (e.g. still loading after a symbol switch)
+      var report = model.reportData();
+      if (!report) return null;
       return JSON.parse(JSON.stringify(report.filledOrders || []));
     })()
   `);
@@ -193,7 +196,11 @@ export async function checkOrbSignal({ symbols, dry_run = false } = {}) {
 
       const entityId = await ensureStrategyOnChart();
       const orders = await getStableFilledOrders(entityId);
-      const orderCount = orders ? orders.length : 0;
+      if (orders === null) {
+        checked.push({ symbol, error: "Strategy report not ready (study still loading) — skipped this cycle" });
+        continue;
+      }
+      const orderCount = orders.length;
 
       const symbolState = state[symbol] || {};
       // The backtest window is "Range from chart", which rolls forward with
