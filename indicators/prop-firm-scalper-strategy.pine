@@ -1,0 +1,169 @@
+//@version=6
+strategy("Prop Firm Scalper [Keagan]", shorttitle="PropScalp", overlay=true,
+     initial_capital=25000, currency=currency.USD, default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_order, commission_value=1.0, slippage=1,
+     pyramiding=0, calc_on_every_tick=false, margin_long=0, margin_short=0,
+     max_lines_count=100, max_boxes_count=50, max_labels_count=200)
+
+// ============================================================
+// Mean-reversion scalper built specifically around prop-firm
+// evaluation rules, not just raw return: it tracks a daily-loss
+// limit and a max-drawdown limit the same way a funded-account
+// challenge enforces them, and self-halts exactly like the
+// account would be disabled, so the backtest honestly reflects
+// "would this have passed", not just "is this profitable".
+//
+// Entry model: fade extensions beyond a Bollinger Band, confirmed
+// by RSI, only when ADX shows the market isn't in a strong trend
+// (mean-reversion gets destroyed trading against a real trend).
+// Market-agnostic by design — no symbol-specific assumptions.
+// ============================================================
+
+// ── Inputs ──
+grpBB     = "Mean Reversion (Bollinger)"
+grpRSI    = "RSI Confirmation"
+grpRegime = "Trend/Regime Filter"
+grpRisk   = "Risk Per Trade"
+grpProp   = "Prop Firm Rules"
+grpSess   = "Session"
+
+bbLen   = input.int(20, "BB Length", minval=5, group=grpBB)
+bbMult  = input.float(2.0, "BB StdDev Multiplier", minval=0.5, maxval=4.0, group=grpBB)
+
+rsiLen        = input.int(14, "RSI Length", minval=2, group=grpRSI)
+rsiOversold   = input.int(30, "RSI Oversold Level", minval=1, maxval=49, group=grpRSI)
+rsiOverbought = input.int(70, "RSI Overbought Level", minval=51, maxval=99, group=grpRSI)
+
+adxLen       = input.int(14, "ADX Length", minval=2, group=grpRegime)
+adxThreshold = input.float(25, "Max ADX to Allow Entries (below = ranging)", minval=5, maxval=60, group=grpRegime)
+
+riskPctPerTrade = input.float(0.25, "Risk % of Equity per Trade", minval=0.05, maxval=5, group=grpRisk)
+rrMultiple      = input.float(1.2, "Reward:Risk Multiple (TP)", minval=0.5, maxval=5, group=grpRisk)
+atrLen          = input.int(14, "ATR Length (stop distance)", minval=1, group=grpRisk)
+atrStopMult     = input.float(1.2, "Stop Distance (x ATR)", minval=0.2, maxval=5, group=grpRisk)
+maxQtyPerTrade  = input.int(50, "Max Contracts/Shares Per Trade (safety cap)", minval=1, group=grpRisk)
+
+maxDailyLossPct      = input.float(4.0, "Max Daily Loss % (halt new entries for the day)", minval=0.5, maxval=20, group=grpProp)
+maxOverallDrawdownPct = input.float(8.0, "Max Overall Drawdown % (halt permanently — simulates account termination)", minval=1, maxval=30, group=grpProp)
+profitTargetPct       = input.float(8.0, "Profit Target % (informational — flags the pass date)", minval=1, maxval=50, group=grpProp)
+
+tradingSession = input.session("0000-2359", "Trading Session (exchange time)", group=grpSess)
+
+// ============================================================
+// SESSION FILTER
+// ============================================================
+inSession = not na(time(timeframe.period, tradingSession))
+
+// ============================================================
+// MEAN REVERSION SIGNAL
+// ============================================================
+basis  = ta.sma(close, bbLen)
+dev    = bbMult * ta.stdev(close, bbLen)
+upperBB = basis + dev
+lowerBB = basis - dev
+
+rsiVal = ta.rsi(close, rsiLen)
+
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+rangingRegime = adxVal < adxThreshold
+
+atrVal = ta.atr(atrLen)
+
+longSetup  = close < lowerBB and rsiVal < rsiOversold  and rangingRegime and inSession
+shortSetup = close > upperBB and rsiVal > rsiOverbought and rangingRegime and inSession
+
+// ============================================================
+// PROP-FIRM RISK GOVERNOR
+// ============================================================
+var int   lastDayNum      = na
+var float dayStartEquity  = na
+var float peakEquity      = na
+var bool  overallHalted   = false
+var int   passedBarIndex  = na
+var float passedEquityPct = na
+
+todayNum = int(time / 86400000)
+newDay = na(lastDayNum) or todayNum != lastDayNum
+if newDay
+    dayStartEquity := strategy.equity
+    lastDayNum := todayNum
+
+if na(peakEquity) or strategy.equity > peakEquity
+    peakEquity := strategy.equity
+
+dailyLossPct     = dayStartEquity > 0 ? (dayStartEquity - strategy.equity) / dayStartEquity * 100 : 0.0
+overallDrawdownPct = peakEquity > 0 ? (peakEquity - strategy.equity) / peakEquity * 100 : 0.0
+profitPct        = (strategy.equity - strategy.initial_capital) / strategy.initial_capital * 100
+
+dailyHalted = dailyLossPct >= maxDailyLossPct
+
+if overallDrawdownPct >= maxOverallDrawdownPct
+    overallHalted := true
+
+if overallHalted and strategy.position_size != 0
+    strategy.close_all("Max drawdown breached — account would be terminated")
+
+if na(passedBarIndex) and profitPct >= profitTargetPct
+    passedBarIndex := bar_index
+    passedEquityPct := profitPct
+
+canTrade = not dailyHalted and not overallHalted
+
+// ============================================================
+// ENTRY / EXIT
+// ============================================================
+riskDistLong  = atrStopMult * atrVal
+riskDistShort = atrStopMult * atrVal
+
+slLong  = close - riskDistLong
+slShort = close + riskDistShort
+tpLong  = close + riskDistLong * rrMultiple
+tpShort = close - riskDistShort * rrMultiple
+
+riskDollarsPerTrade = strategy.equity * riskPctPerTrade / 100
+qtyLong  = riskDistLong  > 0 ? math.min(maxQtyPerTrade, math.max(1, math.round(riskDollarsPerTrade / (riskDistLong  * syminfo.pointvalue)))) : na
+qtyShort = riskDistShort > 0 ? math.min(maxQtyPerTrade, math.max(1, math.round(riskDollarsPerTrade / (riskDistShort * syminfo.pointvalue)))) : na
+
+flat = strategy.position_size == 0
+
+longCondition  = flat and canTrade and longSetup  and not na(qtyLong)  and qtyLong  > 0
+shortCondition = flat and canTrade and shortSetup and not na(qtyShort) and qtyShort > 0
+
+if longCondition
+    strategy.entry("Long", strategy.long, qty=qtyLong)
+    strategy.exit("Long TP/SL", from_entry="Long", stop=slLong, limit=tpLong)
+
+if shortCondition
+    strategy.entry("Short", strategy.short, qty=qtyShort)
+    strategy.exit("Short TP/SL", from_entry="Short", stop=slShort, limit=tpShort)
+
+// ============================================================
+// PLOTS
+// ============================================================
+plot(basis, "BB Basis", color=color.new(color.gray, 30), linewidth=1)
+p1 = plot(upperBB, "BB Upper", color=color.new(color.red, 40), linewidth=1)
+p2 = plot(lowerBB, "BB Lower", color=color.new(color.teal, 40), linewidth=1)
+fill(p1, p2, color=color.new(color.gray, 92))
+
+plotshape(longCondition,  title="Long Entry",  style=shape.triangleup,   location=location.belowbar, color=color.teal, size=size.tiny)
+plotshape(shortCondition, title="Short Entry", style=shape.triangledown, location=location.abovebar, color=color.red,  size=size.tiny)
+
+bgcolor(overallHalted ? color.new(color.red, 85) : dailyHalted ? color.new(color.orange, 88) : na, title="Halt Status")
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+var table dash = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "Prop Scalper", text_color=color.white, bgcolor=color.new(color.blue, 40), text_size=size.small)
+    table.cell(dash, 1, 0, overallHalted ? "FAILED (Max DD)" : dailyHalted ? "DAILY HALT" : "Trading", text_color=color.white, bgcolor=overallHalted ? color.new(color.red, 20) : dailyHalted ? color.new(color.orange, 20) : color.new(color.green, 20), text_size=size.small)
+    table.cell(dash, 0, 1, "Daily P&L", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(-dailyLossPct, "#.##") + "%", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 0, 2, "Overall Drawdown", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(overallDrawdownPct, "#.##") + "%", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 0, 3, "Total Return", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(profitPct, "#.##") + "%", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 0, 4, "Profit Target", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 1, 4, str.tostring(profitTargetPct, "#.##") + "%", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 0, 5, "Target Hit At", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(dash, 1, 5, na(passedBarIndex) ? "not yet" : "bar " + str.tostring(passedBarIndex), text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
