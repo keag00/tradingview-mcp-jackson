@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs `tv prop-scalper-alert check` every 5 minutes via launchd (macOS) —
+  watches the live "Prop Firm Scalper [Keagan]" strategy on your symbol list
+  and notifies you (Pushover) the moment it enters a real trade. Same
+  mechanism as orb-alert: no LLM call, the Pine strategy's own deterministic
+  entry logic is the signal, so this is fast and cheap to run often.
+
+  This strategy is same-day and not yet forward-tested — see
+  PROP_SCALPER_SPEC.md for the real backtest numbers and caveats before
+  trusting its alerts as more than "worth a look."
+
+  This only evaluates and notifies you when TradingView Desktop is already
+  running with CDP enabled (see ./scripts/launch_tv_debug_mac.sh) — it does
+  not launch TradingView itself.
+
+  Note: this shares the same TradingView Desktop browser session as any
+  other scheduled watcher (trade-alert, orb-alert, level-alert) — running
+  several concurrently can race and cause visible chart flicker/symbol
+  drift on whatever window they share. Stagger schedules or pause others
+  during focused interactive work if you see this.
+
+  Setup:
+    1. Replace REPLACE_WITH_PROJECT_DIR below with the absolute path to this
+       repo (e.g. /Users/you/tradingview-mcp-jackson) — three occurrences.
+    2. Replace REPLACE_WITH_NODE_PATH with the absolute path to `node`
+       (run `which node` to find it).
+    3. Set PROP_SCALPER_ALERT_SYMBOLS (comma-separated, default
+       "CME_MINI:ES1!,CME_MINI:NQ1!" — the only two markets this strategy
+       has a verified edge on so far) and PROP_SCALPER_ALERT_COOLDOWN_MINUTES
+       in your .env — see .env.example.
+    4. Copy this file (renamed, dropping .example) to:
+         ~/Library/LaunchAgents/com.tradingview-mcp.prop-scalper-alert.plist
+    5. Load it:
+         launchctl load ~/Library/LaunchAgents/com.tradingview-mcp.prop-scalper-alert.plist
+    6. Check logs at REPLACE_WITH_PROJECT_DIR/prop-scalper-alert.log
+    7. To stop: launchctl unload ~/Library/LaunchAgents/com.tradingview-mcp.prop-scalper-alert.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradingview-mcp.prop-scalper-alert</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPLACE_WITH_NODE_PATH</string>
+    <string>REPLACE_WITH_PROJECT_DIR/src/cli/index.js</string>
+    <string>prop-scalper-alert</string>
+    <string>check</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPLACE_WITH_PROJECT_DIR</string>
+
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>StandardOutPath</key>
+  <string>REPLACE_WITH_PROJECT_DIR/prop-scalper-alert.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>REPLACE_WITH_PROJECT_DIR/prop-scalper-alert.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
