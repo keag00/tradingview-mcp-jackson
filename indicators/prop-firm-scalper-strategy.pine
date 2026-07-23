@@ -41,7 +41,7 @@ riskPctPerTrade = input.float(0.25, "Risk % of Equity per Trade", minval=0.05, m
 rrMultiple      = input.float(1.2, "Reward:Risk Multiple (TP)", minval=0.5, maxval=5, group=grpRisk)
 atrLen          = input.int(14, "ATR Length (stop distance)", minval=1, group=grpRisk)
 atrStopMult     = input.float(1.2, "Stop Distance (x ATR)", minval=0.2, maxval=5, group=grpRisk)
-maxQtyPerTrade  = input.int(50, "Max Contracts/Shares Per Trade (safety cap)", minval=1, group=grpRisk)
+maxNotionalMult = input.float(25.0, "Max Position Notional (x Equity — safety cap against a degenerate tiny-stop position size, not meant to bind in normal sizing)", minval=2, maxval=100, group=grpRisk)
 
 maxDailyLossPct      = input.float(4.0, "Max Daily Loss % (halt new entries for the day)", minval=0.5, maxval=20, group=grpProp)
 maxOverallDrawdownPct = input.float(8.0, "Max Overall Drawdown % (halt permanently — simulates account termination)", minval=1, maxval=30, group=grpProp)
@@ -120,9 +120,18 @@ slShort = close + riskDistShort
 tpLong  = close + riskDistLong * rrMultiple
 tpShort = close - riskDistShort * rrMultiple
 
+// Notional-based safety cap instead of a flat unit count: a flat cap (e.g.
+// "50 units") means wildly different things across instruments — 50 ES1!
+// contracts is enormous, 50 EURUSD units is a $56 position. Capping by
+// position notional relative to equity scales correctly per instrument
+// while still catching the original failure mode this cap exists for (a
+// tiny ATR/stop distance producing an absurd raw quantity).
+notionalPerUnit  = close * syminfo.pointvalue
+maxQtyByNotional = notionalPerUnit > 0 ? math.max(1, math.floor(strategy.equity * maxNotionalMult / notionalPerUnit)) : 1
+
 riskDollarsPerTrade = strategy.equity * riskPctPerTrade / 100
-qtyLong  = riskDistLong  > 0 ? math.min(maxQtyPerTrade, math.max(1, math.round(riskDollarsPerTrade / (riskDistLong  * syminfo.pointvalue)))) : na
-qtyShort = riskDistShort > 0 ? math.min(maxQtyPerTrade, math.max(1, math.round(riskDollarsPerTrade / (riskDistShort * syminfo.pointvalue)))) : na
+qtyLong  = riskDistLong  > 0 ? math.min(maxQtyByNotional, math.max(1, math.round(riskDollarsPerTrade / (riskDistLong  * syminfo.pointvalue)))) : na
+qtyShort = riskDistShort > 0 ? math.min(maxQtyByNotional, math.max(1, math.round(riskDollarsPerTrade / (riskDistShort * syminfo.pointvalue)))) : na
 
 flat = strategy.position_size == 0
 
