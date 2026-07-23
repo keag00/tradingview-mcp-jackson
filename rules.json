@@ -1,5 +1,5 @@
 {
-  "watchlist": ["OANDA:GBPUSD"],
+  "watchlist": ["OANDA:GBPUSD", "CME_MINI:ES1!"],
   "default_timeframe": "5",
   "scan_timeframes": ["15", "5", "1"],
 

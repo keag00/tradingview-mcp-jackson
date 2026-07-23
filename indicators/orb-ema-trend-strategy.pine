@@ -26,6 +26,8 @@ orMinutes   = input.int(5, "Opening Range Length (minutes)", minval=1, maxval=60
 
 emaLen      = input.int(21, "EMA Length", minval=1, group=grpEMA)
 emaSlopeLen = input.int(3, "EMA Slope Lookback (bars)", minval=1, group=grpEMA)
+showFastEma = input.bool(true, "Show Extra Fast EMA (visual only, not used in entry logic)", group=grpEMA)
+fastEmaLen  = input.int(8, "Fast EMA Length", minval=1, group=grpEMA)
 useDailyTrendFilter = input.bool(true, "Require Daily EMA Trend Agreement (higher-timeframe filter)", group=grpEMA)
 dailyEmaLen = input.int(50, "Daily EMA Length", minval=1, group=grpEMA)
 
@@ -86,6 +88,7 @@ if inRTH and not na(orStartTime) and (time - orStartTime) >= orMinutes * 60000 a
 emaVal    = ta.ema(close, emaLen)
 emaRising  = emaVal > emaVal[emaSlopeLen]
 emaFalling = emaVal < emaVal[emaSlopeLen]
+fastEmaVal = ta.ema(close, fastEmaLen)
 
 dailyClose = request.security(syminfo.tickerid, "D", close, lookahead=barmerge.lookahead_off)
 dailyEma   = request.security(syminfo.tickerid, "D", ta.ema(close, dailyEmaLen), lookahead=barmerge.lookahead_off)
@@ -194,6 +197,7 @@ if inFlat and strategy.position_size != 0
 // PLOTS
 // ============================================================
 plot(emaVal, "EMA", color=emaRising ? color.new(color.lime, 30) : emaFalling ? color.new(color.red, 30) : color.new(color.gray, 30), linewidth=2)
+plot(showFastEma ? fastEmaVal : na, "Fast EMA", color=color.new(color.aqua, 20), linewidth=1)
 
 orHighPlot = plot(orSet or inORWindow ? orHigh : na, "OR High", color=color.new(color.yellow, 20), style=plot.style_linebr, linewidth=1)
 orLowPlot  = plot(orSet or inORWindow ? orLow  : na, "OR Low",  color=color.new(color.yellow, 20), style=plot.style_linebr, linewidth=1)

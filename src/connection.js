@@ -71,6 +71,13 @@ export async function connect() {
 async function findChartTarget() {
   const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
   const targets = await resp.json();
+  // TV_CDP_TARGET_ID pins the connection to a specific window/tab (e.g. a
+  // second TradingView Desktop window opened for isolated automation) so
+  // scripted work doesn't disrupt whatever chart the user is looking at.
+  if (process.env.TV_CDP_TARGET_ID) {
+    const pinned = targets.find(t => t.id === process.env.TV_CDP_TARGET_ID);
+    if (pinned) return pinned;
+  }
   // Prefer targets with tradingview.com/chart in the URL
   return targets.find(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
     || targets.find(t => t.type === 'page' && /tradingview/i.test(t.url))

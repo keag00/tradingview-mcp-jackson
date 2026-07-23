@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs `tv level-alert check` every 3 minutes via launchd (macOS) — watches
+  LEVEL_ALERT_SYMBOL for a 15m candle closing above LEVEL_ALERT_HIGH or below
+  LEVEL_ALERT_LOW (set these in .env) and notifies you (Pushover) once per
+  break. Not tied to any strategy — just a raw marked-level watcher.
+
+  Setup:
+    1. Replace REPLACE_WITH_PROJECT_DIR below with the absolute path to this
+       repo — three occurrences.
+    2. Replace REPLACE_WITH_NODE_PATH with the absolute path to `node`
+       (run `which node` to find it).
+    3. Set LEVEL_ALERT_SYMBOL / LEVEL_ALERT_HIGH / LEVEL_ALERT_LOW in .env.
+    4. Copy this file (renamed, dropping .example) to:
+         ~/Library/LaunchAgents/com.tradingview-mcp.level-alert.plist
+    5. Load it:
+         launchctl load ~/Library/LaunchAgents/com.tradingview-mcp.level-alert.plist
+    6. Check logs at REPLACE_WITH_PROJECT_DIR/level-alert.log
+    7. To stop: launchctl unload ~/Library/LaunchAgents/com.tradingview-mcp.level-alert.plist
+
+  Note: this shares the same TradingView Desktop browser session as any
+  other scheduled watcher (trade-alert, orb-alert) — running more than one
+  concurrently can race and cause visible chart flicker/symbol drift. Only
+  run one at a time unless you've confirmed they don't collide.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradingview-mcp.level-alert</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPLACE_WITH_NODE_PATH</string>
+    <string>REPLACE_WITH_PROJECT_DIR/src/cli/index.js</string>
+    <string>level-alert</string>
+    <string>check</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPLACE_WITH_PROJECT_DIR</string>
+
+  <key>StartInterval</key>
+  <integer>180</integer>
+
+  <key>StandardOutPath</key>
+  <string>REPLACE_WITH_PROJECT_DIR/level-alert.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>REPLACE_WITH_PROJECT_DIR/level-alert.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

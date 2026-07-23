@@ -94,11 +94,15 @@ async function ensureStrategyOnChart() {
 }
 
 /**
- * Every order fill (entries AND exits) the strategy has made, oldest first.
+ * Every order fill (entries AND exits) the strategy has made, oldest first,
+ * plus the current backtested performance snapshot (win rate / profit factor
+ * / trade count) for the symbol currently on the chart — included in alert
+ * messages so a signal always comes with the honest track record behind it,
+ * not just a bare direction.
  * `e: true` marks an entry fill — that's the actual "buy-in moment".
  */
 async function getFilledOrders(entityId) {
-  const orders = await evaluate(`
+  const result = await evaluate(`
     (function() {
       var study = ${CHART_API}.getStudyById('${entityId}');
       if (!study) return null;
@@ -106,10 +110,19 @@ async function getFilledOrders(entityId) {
       if (!model) return null; // strategy model not ready yet (e.g. still loading after a symbol switch)
       var report = model.reportData();
       if (!report) return null;
-      return JSON.parse(JSON.stringify(report.filledOrders || []));
+      var perf = report.performance && report.performance.all;
+      return JSON.parse(JSON.stringify({
+        orders: report.filledOrders || [],
+        performance: perf ? {
+          totalTrades: perf.totalTrades,
+          winRate: perf.percentProfitable,
+          profitFactor: perf.profitFactor,
+          netProfit: perf.netProfit,
+        } : null,
+      }));
     })()
   `);
-  return orders;
+  return result;
 }
 
 /**
@@ -122,16 +135,16 @@ async function getFilledOrders(entityId) {
 async function getStableFilledOrders(entityId, { maxAttempts = 8, gapMs = 2500, requiredStreak = 3 } = {}) {
   let last = null;
   let stableStreak = 0;
-  let orders = null;
+  let result = null;
   for (let i = 0; i < maxAttempts && stableStreak < requiredStreak; i++) {
-    orders = await getFilledOrders(entityId);
-    const len = orders ? orders.length : 0;
+    result = await getFilledOrders(entityId);
+    const len = result && result.orders ? result.orders.length : 0;
     if (last !== null && len === last) stableStreak++;
     else stableStreak = 0;
     last = len;
     if (stableStreak < requiredStreak) await new Promise((r) => setTimeout(r, gapMs));
   }
-  return orders;
+  return result;
 }
 
 function tickerPart(symbol) {
@@ -195,11 +208,13 @@ export async function checkOrbSignal({ symbols, dry_run = false } = {}) {
       await new Promise((r) => setTimeout(r, 1200));
 
       const entityId = await ensureStrategyOnChart();
-      const orders = await getStableFilledOrders(entityId);
-      if (orders === null) {
+      const stable = await getStableFilledOrders(entityId);
+      if (stable === null) {
         checked.push({ symbol, error: "Strategy report not ready (study still loading) — skipped this cycle" });
         continue;
       }
+      const orders = stable.orders;
+      const performance = stable.performance;
       const orderCount = orders.length;
 
       const symbolState = state[symbol] || {};
@@ -239,11 +254,16 @@ export async function checkOrbSignal({ symbols, dry_run = false } = {}) {
 
         if (now - lastAlertTime >= cooldownMs) {
           const title = `${symbol} — ORB EMA ${direction} entry`;
+          const perfLine = performance
+            ? ` Backtested track record on this chart right now: ${(performance.winRate * 100).toFixed(0)}% win rate, ` +
+              `profit factor ${performance.profitFactor.toFixed(2)}, over ${performance.totalTrades} trades ` +
+              `(net ${performance.netProfit >= 0 ? "+" : ""}$${performance.netProfit.toFixed(0)}). ` +
+              `${performance.winRate < 0.33 || performance.netProfit < 0 ? "This symbol has NOT had a real edge historically — treat this signal with caution, not confidence." : ""}`
+            : " (backtest stats unavailable this cycle)";
           const body =
             `${symbol}: ORB EMA Trend [Keagan] just entered ${direction} at ${latest.p} ` +
-            `(qty ${latest.q}). This is a real, deterministic strategy signal from a backtested ` +
-            `Pine script, not investment advice — see ORB_STRATEGY_SPEC.md for the real numbers ` +
-            `and caveats before acting on it.`;
+            `(qty ${latest.q}).${perfLine} This is a deterministic strategy signal, not investment ` +
+            `advice — see ORB_STRATEGY_SPEC.md for full numbers and caveats before acting on it.`;
 
           let imagePath;
           if (!dry_run) {
@@ -293,6 +313,7 @@ export async function checkOrbSignal({ symbols, dry_run = false } = {}) {
   if (originalSymbol) {
     try {
       await chart.setSymbol({ symbol: originalSymbol });
+      await new Promise((r) => setTimeout(r, 1200));
       if (originalTimeframe) await chart.setTimeframe({ timeframe: originalTimeframe });
     } catch (_) {}
   }
